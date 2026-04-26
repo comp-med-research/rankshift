@@ -1,0 +1,15 @@
+numpy
+pandas
+scikit-learn
+scipy
+Pillow
+torch
+torchvision
+transformers
+accelerate      # HuggingFace model loading
+umap-learn
+hdbscan
+matplotlib
+seaborn
+tqdm
+editdistance    # reused from ScanGap metrics

@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.env
+data/omnidocbench/
+data/tier5/
+features/*.pkl
+features/*.csv
+models/*.csv
+results/*.csv
+results/*.json
+notebooks/.ipynb_checkpoints/
