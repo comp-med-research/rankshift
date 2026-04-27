@@ -38,10 +38,12 @@ Usage:
 import argparse
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import torch
 from PIL import Image
+from tqdm import tqdm
 
 # Model slug → relative path inside the models/ directory
 SNAPSHOTS = {
@@ -251,21 +253,30 @@ def main():
         return
 
     print(f"Loading model from {model_path} ...")
+    t_load = time.time()
     state = LOADERS[args.model](model_path, args.device)
     infer_fn = INFERENCERS[args.model]
+    print(f"Model loaded in {time.time() - t_load:.1f}s. Starting inference.")
 
     n_ok = n_err = 0
-    for i, img_path in enumerate(todo, 1):
+    pbar = tqdm(
+        todo,
+        desc=args.model,
+        unit="img",
+        dynamic_ncols=True,
+        smoothing=0.1,
+        mininterval=1.0,
+    )
+    for img_path in pbar:
         out_path = args.out_dir / f"{img_path.stem}.md"
         try:
             text = infer_fn(state, img_path)
             out_path.write_text(text, encoding="utf-8")
             n_ok += 1
-            if i % 50 == 0 or i == len(todo):
-                print(f"  [{i}/{len(todo)}] {img_path.name} → {out_path.name}")
         except Exception as exc:
-            print(f"  ERROR [{img_path.name}]: {exc}")
             n_err += 1
+            tqdm.write(f"  ERROR [{img_path.name}]: {exc}")
+        pbar.set_postfix(ok=n_ok, err=n_err, refresh=False)
 
     print(f"\nDone: {n_ok} ok, {n_err} errors. Output: {args.out_dir}")
 

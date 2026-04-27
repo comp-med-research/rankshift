@@ -28,3 +28,8 @@ notebooks/.ipynb_checkpoints/
 .cache/
 .locks/
 *.TAG
+logs/
+
+.venv-vllm/
+features/
+results/

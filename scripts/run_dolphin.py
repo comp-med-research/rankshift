@@ -35,10 +35,12 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
+import threading
+import time
 from pathlib import Path
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
+LIVE_MIRROR_INTERVAL_SEC = 30
 
 DOLPHIN_SNAPSHOT = (
     "models--ByteDance--Dolphin-1.5/snapshots/"
@@ -95,46 +97,81 @@ def main() -> None:
         print("Nothing to do.")
         return
 
-    with tempfile.TemporaryDirectory(prefix="dolphin_") as tmp:
-        tmp = Path(tmp)
-        staging = tmp / "input"
-        save_dir = tmp / "output"
-        staging.mkdir()
+    work_dir = args.out_dir / "_work"
+    staging = work_dir / "input"
+    save_dir = work_dir / "output"
+    md_dir = save_dir / "markdown"
+    staging.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
 
-        for src in todo:
-            dst = staging / src.name
-            try:
-                os.link(src, dst)
-            except OSError:
-                shutil.copyfile(src, dst)
+    for src in todo:
+        dst = staging / src.name
+        if dst.exists():
+            continue
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copyfile(src, dst)
 
-        cmd = [
-            sys.executable, str(demo_script),
-            "--model_path", str(snapshot),
-            "--input_path", str(staging),
-            "--save_dir", str(save_dir),
-            "--max_batch_size", str(args.max_batch_size),
-        ]
-        print("Running:", " ".join(cmd))
-
-        result = subprocess.run(cmd, cwd=str(args.dolphin_repo))
-        if result.returncode != 0:
-            sys.exit(f"ERROR: demo_page_hf.py exited with code {result.returncode}")
-
-        md_dir = save_dir / "markdown"
-        if not md_dir.exists():
-            sys.exit(f"ERROR: no markdown directory at {md_dir}")
-
-        n_ok = 0
-        for src in todo:
-            produced = md_dir / f"{src.stem}.md"
-            if not produced.exists():
-                print(f"  WARN: missing output for {src.name}")
+    def mirror_once() -> int:
+        n = 0
+        for md in md_dir.glob("*.md"):
+            final = args.out_dir / md.name
+            if final.exists():
                 continue
-            shutil.copyfile(produced, args.out_dir / f"{src.stem}.md")
-            n_ok += 1
+            try:
+                shutil.copyfile(md, final)
+                n += 1
+            except OSError:
+                pass
+        return n
 
+    stop_evt = threading.Event()
+
+    def mirror_loop() -> None:
+        while not stop_evt.is_set():
+            try:
+                added = mirror_once()
+                if added:
+                    print(f"[mirror] +{added} md file(s) -> {args.out_dir}",
+                          flush=True)
+            except Exception as exc:
+                print(f"[mirror] WARN: {exc}", flush=True)
+            stop_evt.wait(LIVE_MIRROR_INTERVAL_SEC)
+
+    mirror_thread = threading.Thread(target=mirror_loop, daemon=True)
+    mirror_thread.start()
+
+    cmd = [
+        sys.executable, str(demo_script),
+        "--model_path", str(snapshot),
+        "--input_path", str(staging),
+        "--save_dir", str(save_dir),
+        "--max_batch_size", str(args.max_batch_size),
+    ]
+    print("Running:", " ".join(cmd))
+
+    rc = 0
+    try:
+        result = subprocess.run(cmd, cwd=str(args.dolphin_repo))
+        rc = result.returncode
+    finally:
+        stop_evt.set()
+        mirror_thread.join(timeout=5)
+        mirror_once()
+
+    if rc != 0:
+        sys.exit(f"ERROR: demo_page_hf.py exited with code {rc}")
+
+    n_ok = sum(
+        1 for src in todo
+        if (args.out_dir / f"{src.stem}.md").exists()
+    )
+    n_missing = len(todo) - n_ok
+    if n_missing:
+        print(f"  WARN: {n_missing} of {len(todo)} images produced no output")
     print(f"\nDone: {n_ok}/{len(todo)} ok. Output: {args.out_dir}")
+    print(f"Work dir kept at {work_dir} (safe to delete after verifying outputs)")
 
 
 if __name__ == "__main__":

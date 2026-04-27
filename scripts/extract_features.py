@@ -30,7 +30,7 @@ BACKBONES = {
     "dino": "facebook/dinov2-large",
 }
 
-BATCH_SIZE = 16
+DEFAULT_BATCH_SIZE = 16
 
 
 def load_backbone(name: str, device: torch.device):
@@ -44,10 +44,10 @@ def load_backbone(name: str, device: torch.device):
 
 @torch.no_grad()
 def extract_cls(processor, model, image_paths: list[Path],
-                device: torch.device) -> np.ndarray:
+                device: torch.device, batch_size: int) -> np.ndarray:
     all_feats = []
-    for i in tqdm(range(0, len(image_paths), BATCH_SIZE), desc="  batches"):
-        batch_paths = image_paths[i : i + BATCH_SIZE]
+    for i in tqdm(range(0, len(image_paths), batch_size), desc="  batches"):
+        batch_paths = image_paths[i : i + batch_size]
         images = [Image.open(p).convert("RGB") for p in batch_paths]
         inputs = processor(images=images, return_tensors="pt").to(device)
         outputs = model(**inputs)
@@ -61,6 +61,7 @@ def main():
     parser.add_argument("image_dir", type=Path, help="Directory of document images")
     parser.add_argument("output",    type=Path, help="Output .npy path for feature matrix")
     parser.add_argument("--backbone", choices=["dit", "dino", "both"], default="both")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 
@@ -75,11 +76,13 @@ def main():
 
     feature_parts = []
     for backbone in backbones:
-        print(f"\nExtracting {backbone} features ...")
+        print(f"\nExtracting {backbone} features (batch_size={args.batch_size}) ...")
         processor, model = load_backbone(backbone, device)
-        feats = extract_cls(processor, model, image_paths, device)
+        feats = extract_cls(processor, model, image_paths, device, args.batch_size)
         feature_parts.append(feats)
-        del model  # free VRAM before loading next backbone
+        del model
+        if args.device.startswith("cuda"):
+            torch.cuda.empty_cache()
 
     features = np.concatenate(feature_parts, axis=1) if len(feature_parts) > 1 \
                else feature_parts[0]

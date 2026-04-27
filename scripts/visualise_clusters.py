@@ -10,6 +10,7 @@ Outputs:
 import argparse
 from pathlib import Path
 
+import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -27,8 +28,13 @@ def scatter(ax, xy, c, title, cmap="tab20", vmin=None, vmax=None, s=6, alpha=0.7
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--umap-2d",     type=Path, default=Path("features/umap_2d.npy"))
+    parser.add_argument("--umap-2d-pkl", type=Path,
+                        default=Path("features/umap_reducer_2d.pkl"),
+                        help="2d UMAP reducer used to project Real5 for overlay")
     parser.add_argument("--bench-labels", type=Path,
                         default=Path("features/benchmark_cluster_labels.csv"))
+    parser.add_argument("--real5-features", type=Path,
+                        default=Path("features/real5_features.npy"))
     parser.add_argument("--real5-labels", type=Path,
                         default=Path("features/real5_cluster_labels.csv"))
     parser.add_argument("--scores",       type=Path,
@@ -44,22 +50,41 @@ def main():
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Cluster map ──────────────────────────────────────────────────────────
+    # ── Cluster map (benchmark only) ─────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(6, 5))
     cluster_ids = labels["cluster"].values
     scatter(ax, xy, cluster_ids, "OmniDocBench — UMAP clusters", cmap="tab20")
-
-    if args.real5_labels.exists():
-        real5 = pd.read_csv(args.real5_labels)
-        # Real5 points don't have their own 2d projection — mark separately
-        ax.set_title("OmniDocBench UMAP (cluster colour) + Real5 overlay unavailable\n"
-                     "Run extract_features on both sets with same reducer", fontsize=8)
-
     plt.tight_layout()
     out = args.out_dir / "cluster_map.png"
     fig.savefig(out, dpi=150)
     print(f"Saved {out}")
     plt.close()
+
+    # ── Benchmark + Real5 overlay (2d projection of both) ────────────────────
+    have_overlay = (
+        args.real5_features.exists()
+        and args.umap_2d_pkl.exists()
+    )
+    if have_overlay:
+        print("Projecting Real5 through 2d UMAP reducer for overlay ...")
+        real5_features = np.load(args.real5_features)
+        reducer_2d = joblib.load(args.umap_2d_pkl)
+        real5_xy = reducer_2d.transform(real5_features)
+        np.save(args.out_dir / "real5_umap_2d.npy", real5_xy)
+
+        fig, ax = plt.subplots(figsize=(7, 6))
+        scatter(ax, xy, cluster_ids,
+                "OmniDocBench UMAP clusters + Real5 overlay (black ×)",
+                cmap="tab20", alpha=0.5)
+        ax.scatter(real5_xy[:, 0], real5_xy[:, 1],
+                   c="black", marker="x", s=10, alpha=0.5,
+                   linewidths=0.6, label=f"Real5 (n={len(real5_xy)})")
+        ax.legend(loc="best", fontsize=8)
+        plt.tight_layout()
+        out = args.out_dir / "cluster_map_real5_overlay.png"
+        fig.savefig(out, dpi=150)
+        print(f"Saved {out}")
+        plt.close()
 
     # ── Per-model performance maps ────────────────────────────────────────────
     if args.scores.exists() and args.perf_models:

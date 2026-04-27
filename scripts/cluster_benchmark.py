@@ -101,6 +101,17 @@ def main():
 
     cluster_df = pd.DataFrame({"image": names, "cluster": labels})
     cluster_df.to_csv(args.out_dir / "benchmark_cluster_labels.csv", index=False)
+    print(f"Saved benchmark_cluster_labels.csv")
+
+    if not args.scores.exists():
+        print(
+            f"\nScores file not found at {args.scores} — skipping per-cluster "
+            "performance matrix.\nRe-run with --scores once "
+            "models/omnidocbench_scores.csv exists, or use "
+            "scripts/build_perf_matrix.py to compute it from the saved "
+            "cluster labels without redoing UMAP/HDBSCAN."
+        )
+        return
 
     scores = pd.read_csv(args.scores)
     merged = scores.merge(cluster_df, on="image")
