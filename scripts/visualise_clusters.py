@@ -29,8 +29,8 @@ def main():
     parser.add_argument("--umap-2d",     type=Path, default=Path("features/umap_2d.npy"))
     parser.add_argument("--bench-labels", type=Path,
                         default=Path("features/benchmark_cluster_labels.csv"))
-    parser.add_argument("--tier5-labels", type=Path,
-                        default=Path("features/tier5_cluster_labels.csv"))
+    parser.add_argument("--real5-labels", type=Path,
+                        default=Path("features/real5_cluster_labels.csv"))
     parser.add_argument("--scores",       type=Path,
                         default=Path("models/omnidocbench_scores.csv"),
                         help="Per-image model scores for performance colouring")
@@ -49,10 +49,10 @@ def main():
     cluster_ids = labels["cluster"].values
     scatter(ax, xy, cluster_ids, "OmniDocBench — UMAP clusters", cmap="tab20")
 
-    if args.tier5_labels.exists():
-        tier5 = pd.read_csv(args.tier5_labels)
-        # Tier 5 points don't have their own 2d projection — mark separately
-        ax.set_title("OmniDocBench UMAP (cluster colour) + Tier 5 overlay unavailable\n"
+    if args.real5_labels.exists():
+        real5 = pd.read_csv(args.real5_labels)
+        # Real5 points don't have their own 2d projection — mark separately
+        ax.set_title("OmniDocBench UMAP (cluster colour) + Real5 overlay unavailable\n"
                      "Run extract_features on both sets with same reducer", fontsize=8)
 
     plt.tight_layout()

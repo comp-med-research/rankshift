@@ -1,11 +1,30 @@
 __pycache__/
 *.py[cod]
 .env
+
+# Datasets (symlinked from elsewhere)
 data/omnidocbench/
-data/tier5/
+data/real5/
+
+# Large artifacts (downloaded HF snapshots, OCR predictions, feature dumps)
+models/
+predictions/
+features/*.npy
 features/*.pkl
 features/*.csv
+
+# Per-image score CSVs and result outputs
 models/*.csv
 results/*.csv
 results/*.json
+
 notebooks/.ipynb_checkpoints/
+
+# Virtualenvs
+.venv/
+.venv-deepseek/
+
+# HF / torch caches if accidentally created in-repo
+.cache/
+.locks/
+*.TAG

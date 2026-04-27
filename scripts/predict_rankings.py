@@ -1,10 +1,10 @@
 """
-Phase 3: Predict model rankings on Tier 5 by weighting benchmark
+Phase 3: Predict model rankings on Real5 by weighting benchmark
 per-cluster performance by the target distribution.
 
 Inputs:
   - features/cluster_model_perf.csv
-  - features/tier5_cluster_weights.csv
+  - features/real5_cluster_weights.csv
 
 Output:
   - results/predicted_rankings.csv
@@ -20,7 +20,7 @@ import pandas as pd
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--perf", type=Path, default=Path("features/cluster_model_perf.csv"))
-    parser.add_argument("--weights", type=Path, default=Path("features/tier5_cluster_weights.csv"))
+    parser.add_argument("--weights", type=Path, default=Path("features/real5_cluster_weights.csv"))
     parser.add_argument("--out-dir", type=Path, default=Path("results"))
     args = parser.parse_args()
 
@@ -44,7 +44,7 @@ def main():
     args.out_dir.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.out_dir / "predicted_rankings.csv", index=False)
 
-    print("Predicted model ranking on Tier 5:")
+    print("Predicted model ranking on Real5:")
     print(out.to_string(index=False))
 
 

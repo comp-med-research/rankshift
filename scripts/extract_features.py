@@ -10,7 +10,7 @@ CLS token is used as the global image embedding.
 
 Usage:
   python scripts/extract_features.py data/omnidocbench/images features/omnidocbench_features.npy
-  python scripts/extract_features.py data/tier5/images        features/tier5_features.npy
+  python scripts/extract_features.py data/real5/images        features/real5_features.npy
   python scripts/extract_features.py ... --backbone dit        # 1024-dim
   python scripts/extract_features.py ... --backbone dino       # 1024-dim
   python scripts/extract_features.py ... --backbone both       # 2048-dim (default)

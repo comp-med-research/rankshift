@@ -1,5 +1,5 @@
 """
-Phase 2: Map target (Tier 5) samples into the benchmark cluster space
+Phase 2: Map target (Real5) samples into the benchmark cluster space
 and compute target distribution weights over benchmark clusters.
 
 Uses the saved UMAP reducer + HDBSCAN clusterer from cluster_benchmark.py.
@@ -7,16 +7,16 @@ Noise points (-1) are assigned to their nearest cluster centroid so that
 every target sample contributes to the distribution weights.
 
 Inputs:
-  - features/tier5_features.npy
-  - features/tier5_features.names.txt
+  - features/real5_features.npy
+  - features/real5_features.names.txt
   - features/umap_reducer.pkl
   - features/hdbscan_clusterer.pkl
   - features/benchmark_cluster_labels.csv   (to compute cluster centroids)
   - features/umap_embedding.npy             (benchmark UMAP embedding, for centroids)
 
 Outputs:
-  - features/tier5_cluster_weights.csv      (cluster, weight)
-  - features/tier5_cluster_labels.csv       (image, cluster)
+  - features/real5_cluster_weights.csv      (cluster, weight)
+  - features/real5_cluster_labels.csv       (image, cluster)
 """
 
 import argparse
@@ -40,7 +40,7 @@ def nearest_centroid(X_new: np.ndarray, X_bench: np.ndarray,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--features",       type=Path,
-                        default=Path("features/tier5_features.npy"))
+                        default=Path("features/real5_features.npy"))
     parser.add_argument("--umap",           type=Path,
                         default=Path("features/umap_reducer.pkl"))
     parser.add_argument("--clusterer",      type=Path,
@@ -88,10 +88,10 @@ def main():
         "count":   counts.astype(int),
         "weight":  weights,
     })
-    weights_df.to_csv(args.out_dir / "tier5_cluster_weights.csv", index=False)
+    weights_df.to_csv(args.out_dir / "real5_cluster_weights.csv", index=False)
 
     pd.DataFrame({"image": names, "cluster": labels}).to_csv(
-        args.out_dir / "tier5_cluster_labels.csv", index=False
+        args.out_dir / "real5_cluster_labels.csv", index=False
     )
 
     print("\nTarget distribution over benchmark clusters:")

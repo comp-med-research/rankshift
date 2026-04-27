@@ -1,10 +1,10 @@
 """
-Phase 3: Evaluate predicted rankings against actual Tier 5 rankings.
+Phase 3: Evaluate predicted rankings against actual Real5 rankings.
 Compares RankShift method vs naive baseline (raw benchmark ranking).
 
 Inputs:
   - results/predicted_rankings.csv
-  - models/tier5_scores.csv          (actual model scores on Tier 5, withheld labels)
+  - models/real5_scores.csv          (actual model scores on Real5, withheld labels)
   - models/omnidocbench_scores.csv   (to derive naive baseline ranking)
 
 Output:
@@ -27,16 +27,16 @@ def model_ranking_from_scores(scores_df: pd.DataFrame) -> pd.Series:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--predicted", type=Path, default=Path("results/predicted_rankings.csv"))
-    parser.add_argument("--tier5-scores", type=Path, default=Path("models/tier5_scores.csv"))
+    parser.add_argument("--real5-scores", type=Path, default=Path("models/real5_scores.csv"))
     parser.add_argument("--bench-scores", type=Path, default=Path("models/omnidocbench_scores.csv"))
     parser.add_argument("--out-dir", type=Path, default=Path("results"))
     args = parser.parse_args()
 
     predicted = pd.read_csv(args.predicted).set_index("model")["predicted_rank"]
-    tier5_scores = pd.read_csv(args.tier5_scores)
+    real5_scores = pd.read_csv(args.real5_scores)
     bench_scores = pd.read_csv(args.bench_scores)
 
-    actual_rank = model_ranking_from_scores(tier5_scores)
+    actual_rank = model_ranking_from_scores(real5_scores)
     baseline_rank = model_ranking_from_scores(bench_scores)
 
     models = predicted.index.intersection(actual_rank.index).intersection(baseline_rank.index)
