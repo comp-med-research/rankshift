@@ -2,9 +2,8 @@ __pycache__/
 *.py[cod]
 .env
 
-# Datasets (symlinked from elsewhere)
-data/omnidocbench/
-data/real5/
+# Datasets
+data/
 
 # Large artifacts (downloaded HF snapshots, OCR predictions, feature dumps)
 models/
@@ -22,7 +21,10 @@ notebooks/.ipynb_checkpoints/
 
 # Virtualenvs
 .venv/
-.venv-deepseek/
+.venv-*/
+
+# Shell scripts (contain machine-specific paths)
+*.sh
 
 # HF / torch caches if accidentally created in-repo
 .cache/

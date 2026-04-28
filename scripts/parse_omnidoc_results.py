@@ -95,16 +95,35 @@ def main():
                         help="Output CSV path (appended if exists)")
     parser.add_argument("--composite", action="store_true",
                         help="Average accuracy across all available elements (default: text_block only)")
+    parser.add_argument("--predictions-dir", type=Path, default=None,
+                        help="If set, restrict scores to images that have a "
+                             ".md prediction in this directory (so partial runs "
+                             "don't get diluted by score=0 for missing pages)")
     args = parser.parse_args()
 
     save_name = args.save_name or f"{args.model}_quick_match"
     scores = parse_scores(args.result_dir, save_name, args.composite)
     print(f"[{args.model}] Parsed {len(scores)} page scores from save_name={save_name!r}")
 
+    if args.predictions_dir is not None:
+        if not args.predictions_dir.exists():
+            raise SystemExit(f"--predictions-dir not found: {args.predictions_dir}")
+        pred_stems = {p.stem for p in args.predictions_dir.glob("*.md")}
+        before = len(scores)
+        scores = {img: s for img, s in scores.items()
+                  if Path(img).stem in pred_stems}
+        print(f"  Filtered to predictions on disk: {before} → {len(scores)} "
+              f"(coverage = {len(scores)}/{len(pred_stems)} on-disk preds)")
+
     rows = pd.DataFrame([
         {"image": img, "model_name": args.model, "score": score}
         for img, score in scores.items()
     ])
+
+    if len(rows):
+        print(f"  Mean score: {rows.score.mean():.3f}  "
+              f"(median: {rows.score.median():.3f}, "
+              f"perfect: {(rows.score==1.0).sum()})")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     if args.out.exists():

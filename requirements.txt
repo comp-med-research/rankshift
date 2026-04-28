@@ -6,6 +6,7 @@ Pillow
 torch
 torchvision
 transformers
+huggingface_hub
 accelerate      # HuggingFace model loading
 umap-learn
 hdbscan

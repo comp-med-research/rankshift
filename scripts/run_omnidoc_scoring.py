@@ -44,6 +44,7 @@ Usage:
 """
 
 import argparse
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -85,7 +86,8 @@ _BASE_CONFIG = {
                 "metric": ["Edit_dist"],
             },
             "display_formula": {
-                "metric": ["Edit_dist"],
+                "metric": ["Edit_dist", "CDM"],
+                "cdm_workers": 8,
             },
             "table": {
                 "metric": ["Edit_dist", "TEDS"],
@@ -127,8 +129,32 @@ def run_validation(omnidocbench_dir: Path, config_path: Path) -> bool:
     return result.returncode == 0
 
 
+def rename_results(result_dir: Path, base: str, target: str) -> int:
+    """Rename pdf_validation output files: {base}_* → {target}_* in place.
+
+    pdf_validation.py derives output filenames from prediction folder name
+    (e.g. predictions/real5/glm_ocr → glm_ocr_quick_match_*). To avoid clashes
+    when scoring the same model on multiple datasets, rename per-run files.
+    """
+    if base == target:
+        return 0
+    n = 0
+    for src in result_dir.glob(f"{base}_*"):
+        rel = src.name[len(base):]
+        dst = result_dir / f"{target}{rel}"
+        if dst.exists():
+            if dst.is_dir():
+                shutil.rmtree(dst)
+            else:
+                dst.unlink()
+        src.rename(dst)
+        n += 1
+    return n
+
+
 def run_parse(rankshift_root: Path, result_dir: Path, model: str,
-              save_name: str, out: Path, composite: bool) -> bool:
+              save_name: str, out: Path, composite: bool,
+              predictions_dir: Path | None = None) -> bool:
     venv_python = rankshift_root / ".venv" / "bin" / "python"
     python = str(venv_python) if venv_python.exists() else sys.executable
     cmd = [
@@ -140,6 +166,8 @@ def run_parse(rankshift_root: Path, result_dir: Path, model: str,
     ]
     if composite:
         cmd.append("--composite")
+    if predictions_dir is not None:
+        cmd += ["--predictions-dir", str(predictions_dir)]
     result = subprocess.run(cmd, cwd=rankshift_root)
     return result.returncode == 0
 
@@ -207,8 +235,15 @@ def main():
                 n_fail += 1
                 continue
 
+            base_name = f"{model}_quick_match"
+            if save_name != base_name:
+                n_renamed = rename_results(result_dir, base_name, save_name)
+                print(f"  Renamed {n_renamed} result files: "
+                      f"{base_name}_* → {save_name}_*")
+
         ok = run_parse(rankshift_root, result_dir, model, save_name,
-                       args.out, args.composite)
+                       args.out, args.composite,
+                       predictions_dir=pred_path)
         if ok:
             n_ok += 1
         else:
