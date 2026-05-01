@@ -32,11 +32,30 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 
-GLM_OCR_SNAPSHOT = (
+GLM_OCR_REPO = "models--zai-org--GLM-OCR"
+# Fallback if refs/main missing (e.g. partial cache)
+GLM_OCR_SNAPSHOT_FALLBACK = (
     "models--zai-org--GLM-OCR/snapshots/cb34f33832c51008c86436a3b2217bbe4adbe0b8"
 )
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp"}
+
+
+def resolve_glm_ocr_snapshot(model_dir: Path) -> Path:
+    """Local cache path for zai-org/GLM-OCR (HF main ref, else newest snapshot dir)."""
+    ref = model_dir / GLM_OCR_REPO / "refs" / "main"
+    if ref.is_file():
+        rev = ref.read_text(encoding="utf-8").strip()
+        snap = model_dir / GLM_OCR_REPO / "snapshots" / rev
+        if snap.is_dir():
+            return snap
+    snap_root = model_dir / GLM_OCR_REPO / "snapshots"
+    if snap_root.is_dir():
+        candidates = [p for p in snap_root.iterdir() if p.is_dir()]
+        if candidates:
+            return max(candidates, key=lambda p: p.stat().st_mtime)
+    return model_dir / GLM_OCR_SNAPSHOT_FALLBACK
+
 
 # Apply the model's own chat_template for the user turn so the prompt
 # matches what HF transformers produces.  vLLM substitutes the actual
@@ -70,8 +89,8 @@ def main() -> None:
                              "(default: <repo_root>/models)")
     parser.add_argument("--max-num-seqs", type=int, default=8,
                         help="Concurrent sequences for vLLM continuous batching")
-    parser.add_argument("--max-model-len", type=int, default=8192,
-                        help="Max prompt+gen length")
+    parser.add_argument("--max-model-len", type=int, default=16384,
+                        help="Max prompt+gen length (needs headroom beyond --max-new-tokens for vision)")
     parser.add_argument("--max-new-tokens", type=int, default=4096,
                         help="Cap on generated tokens per image")
     parser.add_argument("--gpu-mem-fraction", type=float, default=0.85,
@@ -83,7 +102,7 @@ def main() -> None:
 
     repo_root = Path(__file__).resolve().parents[1]
     model_dir = args.model_dir or (repo_root / "models")
-    model_path = model_dir / GLM_OCR_SNAPSHOT
+    model_path = resolve_glm_ocr_snapshot(model_dir)
     if not model_path.exists():
         sys.exit(f"ERROR: GLM-OCR snapshot not found at {model_path}")
 

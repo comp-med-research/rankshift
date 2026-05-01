@@ -44,6 +44,7 @@ Usage:
 """
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -56,17 +57,32 @@ import yaml
 # runnable on a single L40S 48GB. API models (gpt_5_2, gemini_3_pro, nanonets_ocr_s)
 # are kept in the repo but reserved for the final evaluation run.
 # Canonical leaderboard names → slug:
-#   Dolphin-1.5          → dolphin_1_5          (~7B, ByteDance)
-#   MonkeyOCR-pro-3B     → monkeyocr_pro_3b     (~3B, fits easily)
+#   Dolphin-1.5          → dolphin_1_5          (0.3B, ByteDance/Dolphin-1.5)
+#   OpenDoc-0.1B         → opendoc_0_1b         (openocr-python / Topdu OpenOCR)
+#   MonkeyOCR-pro-3B     → monkeyocr_pro_3b     (~3B, echo840/MonkeyOCR-pro-3B)
 #   PaddleOCR-VL-1.5     → paddleocr_vl_1_5     (PaddlePaddle open-source)
 #   DeepSeek-OCR 2       → deepseek_ocr_2        (DeepSeek open-source)
 #   GLM-OCR              → glm_ocr               (Zhipu AI open-source)
+#   GOT-OCR              → got_ocr2              (ucaslcl/GOT-OCR2_0)
+#   MinerU2.5            → mineru_1_2b           (opendatalab/MinerU2.5-2509-1.2B)
 MODELS = [
     "dolphin_1_5",
+    "opendoc_0_1b",
     "monkeyocr_pro_3b",
     "paddleocr_vl_1_5",
     "deepseek_ocr_2",
     "glm_ocr",
+    "got_ocr2",
+    "mineru_1_2b",
+    # scripts/infer/run_extra_benchmark_models.py (+ tesseract); install per setup_extra_benchmark_models.sh
+    "chandra2",
+    "docling_ocr",
+    "doctr",
+    "donut",
+    "nougat",
+    "marker",
+    "rolmocr",
+    "tesseract",
 ]
 
 # Final evaluation models (API-based, reserved for end-to-end run):
@@ -125,7 +141,13 @@ def run_validation(omnidocbench_dir: Path, config_path: Path) -> bool:
     python = str(venv_python) if venv_python.exists() else sys.executable
     cmd = [python, "pdf_validation.py", "--config", str(config_path)]
     print(f"  Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=omnidocbench_dir)
+    env = os.environ.copy()
+    # CDM calls `magick` (ImageMagick 7); Debian/Ubuntu ship IM6 as `convert`.
+    # Install a shim at ~/bin/magick (see rankshift setup) so formula metrics run.
+    magick_shim = Path.home() / "bin" / "magick"
+    if magick_shim.is_file():
+        env["PATH"] = f"{magick_shim.parent}{os.pathsep}{env.get('PATH', '')}"
+    result = subprocess.run(cmd, cwd=omnidocbench_dir, env=env)
     return result.returncode == 0
 
 

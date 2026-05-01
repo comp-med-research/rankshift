@@ -13,8 +13,11 @@ matching venv):
   deepseek_ocr_2    deepseek-ai/DeepSeek-OCR-2
                     venv: rankshift/.venv-deepseek    (transformers==4.46.3)
 
-For dolphin_1_5     use scripts/run_dolphin.py    (requires Dolphin v1.0 repo).
+For dolphin_1_5     use scripts/run_dolphin.py    (Dolphin v1.5 repo; see setup_dolphin_opendoc.sh).
+For opendoc_0_1b    use scripts/infer/run_opendoc.py (.venv-opendoc; see setup_dolphin_opendoc.sh).
 For monkeyocr_pro_3b use scripts/run_monkeyocr.py (requires MonkeyOCR repo).
+For chandra2, docling_ocr, doctr, donut, nougat, marker, rolmocr, tesseract
+use scripts/infer/run_extra_benchmark_models.py (see setup_extra_benchmark_models.sh).
 
 Usage:
   source ~/projects/rankshift/.venv/bin/activate     # for glm/paddle
@@ -36,6 +39,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import tempfile
 import time
@@ -44,6 +48,19 @@ from pathlib import Path
 import torch
 from PIL import Image
 from tqdm import tqdm
+
+
+def _configure_cuda_performance() -> None:
+    """Tune PyTorch for throughput on Hopper / Ada (single-GPU inference)."""
+    if not torch.cuda.is_available():
+        return
+    torch.set_float32_matmul_precision("high")
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+    # Optional: avoid sync when debugging perf (unset for correctness debugging)
+    if os.environ.get("CUDA_LAUNCH_BLOCKING") == "1":
+        torch.backends.cudnn.benchmark = False
 
 # Model slug → relative path inside the models/ directory
 SNAPSHOTS = {
@@ -155,6 +172,7 @@ def load_deepseek_ocr2(model_path: Path, device: str):
         attn_impl = "flash_attention_2"
     except ImportError:
         attn_impl = "eager"
+    print(f"[deepseek_ocr_2] attention implementation: {attn_impl} (install flash-attn in .venv-deepseek for much faster inference)")
     tokenizer = AutoTokenizer.from_pretrained(str(model_path), trust_remote_code=True)
     model = AutoModel.from_pretrained(
         str(model_path),
@@ -225,6 +243,13 @@ def main():
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 
+    _configure_cuda_performance()
+    if torch.cuda.is_available() and str(args.device).startswith("cuda"):
+        idx = torch.cuda.current_device()
+        dev = torch.cuda.get_device_name(idx)
+        caps = torch.cuda.get_device_capability(idx)
+        print(f"[cuda] index={idx} name={dev} capability={caps}")
+
     repo_root = Path(__file__).resolve().parents[1]
     model_dir = args.model_dir or (repo_root / "models")
     model_path = model_dir / SNAPSHOTS[args.model]
@@ -267,16 +292,17 @@ def main():
         smoothing=0.1,
         mininterval=1.0,
     )
-    for img_path in pbar:
-        out_path = args.out_dir / f"{img_path.stem}.md"
-        try:
-            text = infer_fn(state, img_path)
-            out_path.write_text(text, encoding="utf-8")
-            n_ok += 1
-        except Exception as exc:
-            n_err += 1
-            tqdm.write(f"  ERROR [{img_path.name}]: {exc}")
-        pbar.set_postfix(ok=n_ok, err=n_err, refresh=False)
+    with torch.inference_mode():
+        for img_path in pbar:
+            out_path = args.out_dir / f"{img_path.stem}.md"
+            try:
+                text = infer_fn(state, img_path)
+                out_path.write_text(text, encoding="utf-8")
+                n_ok += 1
+            except Exception as exc:
+                n_err += 1
+                tqdm.write(f"  ERROR [{img_path.name}]: {exc}")
+            pbar.set_postfix(ok=n_ok, err=n_err, refresh=False)
 
     print(f"\nDone: {n_ok} ok, {n_err} errors. Output: {args.out_dir}")
 

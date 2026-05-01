@@ -126,6 +126,18 @@ def main() -> None:
                         help="Recognition VLM backend "
                              "(transformers needs no extra deps, "
                              "lmdeploy/vllm are much faster)")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="MonkeyOCR YAML config (default: models/monkeyocr_model_configs.yaml if present)",
+    )
+    parser.add_argument(
+        "--stems-file",
+        type=Path,
+        default=None,
+        help="Only process image stems listed (one per line); names match Path.stem",
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -141,6 +153,20 @@ def main() -> None:
         p for p in args.images_dir.iterdir()
         if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     )
+    if args.stems_file:
+        stems_path = args.stems_file.expanduser().resolve()
+        if not stems_path.is_file():
+            sys.exit(f"ERROR: --stems-file not found: {stems_path}")
+        lines = stems_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        want = {
+            ln.strip()
+            for ln in lines
+            if ln.strip() and not ln.strip().startswith("#")
+        }
+        before = len(images)
+        images = [p for p in images if p.stem in want]
+        print(f"[stems-file] kept {len(images)} of {before} images "
+              f"(listed {len(want)} stems from {stems_path})")
     if not images:
         sys.exit(f"ERROR: no images found in {args.images_dir}")
 
@@ -163,19 +189,33 @@ def main() -> None:
     except ImportError as exc:
         sys.exit(
             f"ERROR: cannot import magic_pdf ({exc}).\n"
-            "Run this script from MonkeyOCR's venv with its repo as cwd:\n"
-            "    cd ~/projects/MonkeyOCR\n"
-            "    source .venv/bin/activate"
+            "Activate rankshift Monkey venv:\n"
+            "    cd ~/projects/rankshift\n"
+            "    source .venv-monkey/bin/activate"
         )
 
-    config_path = make_config(model_root, args.backend)
-    print(f"Loading MonkeyOCR (backend={args.backend}) "
-          f"from {model_root} ...")
+    repo_cfg = repo_root / "models" / "monkeyocr_model_configs.yaml"
+    temp_config = False
+    if args.config is not None:
+        config_path = args.config.expanduser().resolve()
+        if not config_path.is_file():
+            sys.exit(f"ERROR: --config not found: {config_path}")
+        print(f"Using --config {config_path}")
+    elif repo_cfg.is_file():
+        config_path = repo_cfg
+        print(f"Using repo config: {config_path}")
+    else:
+        config_path = make_config(model_root, args.backend)
+        temp_config = True
+        print(f"Using generated temp config (backend={args.backend}); "
+              "add models/monkeyocr_model_configs.yaml to use doclayout_yolo")
+
+    print(f"Loading MonkeyOCR from {model_root} ...")
+    n_ok = n_err = 0
     try:
         monkey = MonkeyOCR(str(config_path))
         reader = FileBasedDataReader()
 
-        n_ok = n_err = 0
         for i, img_path in enumerate(todo, 1):
             out_md = args.out_dir / f"{img_path.stem}.md"
             try:
@@ -190,7 +230,8 @@ def main() -> None:
                 print(f"  ERROR [{img_path.name}]: {exc}")
                 n_err += 1
     finally:
-        config_path.unlink(missing_ok=True)
+        if temp_config:
+            config_path.unlink(missing_ok=True)
 
     print(f"\nDone: {n_ok} ok, {n_err} errors. Output: {args.out_dir}")
 

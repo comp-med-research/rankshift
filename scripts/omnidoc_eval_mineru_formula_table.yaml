@@ -1,0 +1,22 @@
+# OmniDocBench end2end eval: display_formula (Edit + CDM) and table (Edit + TEDS) only.
+# Ground truth: v1.5 JSON (1355 pages). Requires PATH to include a `magick` shim (IM6 → convert).
+end2end_eval:
+  metrics:
+    display_formula:
+      metric: ["Edit_dist", "CDM"]
+      cdm_workers: 8
+    table:
+      metric: ["Edit_dist", "TEDS"]
+      teds_workers: 8
+  dataset:
+    dataset_name: end2end_dataset
+    ground_truth:
+      data_path: /home/halimatmac/projects/rankshift/data/omnidocbench/OmniDocBench_v1.5.json
+    prediction:
+      data_path: /home/halimatmac/projects/rankshift/predictions/omnidocbench/mineru_1_2b
+    match_method: quick_match
+    match_workers: 8
+    quick_match_truncated_timeout_sec: 300
+    match_timeout_sec: 420
+    timeout_fallback_max_chunk_span: 10
+    timeout_fallback_order_penalty: 0.10

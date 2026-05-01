@@ -35,3 +35,5 @@ logs/
 .venv-vllm/
 features/
 results/
+
+rankshift_save_2026-04-28.tgz

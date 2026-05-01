@@ -1,33 +1,25 @@
 """
-Run Dolphin-1.5 inference on a directory of images.
+Run Dolphin-1.5 (0.3B) inference on a directory of images.
 
-Dolphin is a two-stage VED pipeline (Swin encoder + MBart decoder, prompted
-twice per image: stage 1 = page layout / reading-order, stage 2 = per-element
-text/table parsing, then assembled into markdown). It needs the Dolphin v1.0
-repo (utils/utils.py, utils/markdown_utils.py, demo_page_hf.py) and pins
-transformers==4.47.0, which is incompatible with rankshift's venv
-(transformers 5.x). Therefore it must be run from Dolphin's own venv.
+Uses the official [Dolphin](https://github.com/bytedance/Dolphin) repo:
+- **v1.5** branch: `demo_page.py` (VisionEncoderDecoderModel, current 1.5 release)
+- **v1.0** branch: `demo_page_hf.py` (legacy entrypoint)
 
-One-time setup:
-    git clone --depth 1 -b v1.0 https://github.com/bytedance/Dolphin.git \\
-        ~/projects/Dolphin
-    cd ~/projects/Dolphin
-    python3 -m venv .venv
-    source .venv/bin/activate
-    pip install --upgrade pip wheel setuptools
-    pip install "transformers==4.47.0" "accelerate==1.6.0" "omegaconf==2.3.0" \\
-        timm pymupdf opencv-python pillow torch torchvision
+Stage 1 predicts layout / reading order; stage 2 parses elements; markdown is
+written under `save_dir/markdown/`. This driver mirrors those files to a flat
+`--out-dir/{stem}.md` for OmniDocBench scoring.
+
+transformers==4.47.x is pinned upstream; use a dedicated venv (see
+`scripts/setup_dolphin_opendoc.sh`).
 
 Usage:
-    source ~/projects/Dolphin/.venv/bin/activate
-    cd ~/projects/Dolphin   # demo_page_hf.py uses `from utils.utils import *`
-
+    source ~/projects/rankshift/.venv-dolphin-15/bin/activate
     python ~/projects/rankshift/scripts/run_dolphin.py \\
-        --images-dir ~/projects/rankshift/data/omnidocbench/omnidocbench/images \\
+        --dolphin-repo ~/projects/Dolphin-1.5 \\
+        --images-dir ~/projects/rankshift/data/omnidocbench/images \\
         --out-dir   ~/projects/rankshift/predictions/omnidocbench/dolphin_1_5
 
-Output: one `<image_stem>.md` per input image in --out-dir, matching the layout
-produced by run_inference.py for the other Transformers models.
+Output: one `<image_stem>.md` per input image in --out-dir.
 """
 
 import argparse
@@ -42,10 +34,43 @@ from pathlib import Path
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 LIVE_MIRROR_INTERVAL_SEC = 30
 
-DOLPHIN_SNAPSHOT = (
-    "models--ByteDance--Dolphin-1.5/snapshots/"
-    "0fe42a93fa2a8f7b537606710ea45ad8b2b0f349"
-)
+DOLPHIN_HF_ID = "ByteDance/Dolphin-1.5"
+
+
+def resolve_dolphin_snapshot(model_dir: Path) -> Path:
+    """Weights for ByteDance/Dolphin-1.5: prefer MODEL_DOLPHIN_15, else newest snapshot by mtime."""
+    env_snap = os.environ.get("MODEL_DOLPHIN_15", "").strip()
+    if env_snap:
+        p = Path(env_snap).resolve()
+        if p.is_dir():
+            return p
+    snap_root = model_dir / "models--ByteDance--Dolphin-1.5" / "snapshots"
+    if not snap_root.is_dir():
+        sys.exit(
+            f"ERROR: Dolphin-1.5 snapshot root not found at {snap_root}\n"
+            f"Run: bash {Path(__file__).resolve().parent / 'setup_dolphin_opendoc.sh'}\n"
+            f"Or: HF_HOME={model_dir} python -c \"from huggingface_hub import snapshot_download; "
+            f"snapshot_download('{DOLPHIN_HF_ID}', cache_dir='{model_dir}')\""
+        )
+    candidates = [p for p in snap_root.iterdir() if p.is_dir()]
+    if not candidates:
+        sys.exit(f"ERROR: no snapshot revision under {snap_root}")
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def pick_demo_script(dolphin_repo: Path) -> Path:
+    """v1.5 uses demo_page.py; v1.0 used demo_page_hf.py — prefer current when both exist."""
+    legacy = dolphin_repo / "demo_page_hf.py"
+    current = dolphin_repo / "demo_page.py"
+    if current.exists():
+        return current
+    if legacy.exists():
+        return legacy
+    sys.exit(
+        f"ERROR: neither demo_page_hf.py nor demo_page.py in {dolphin_repo}\n"
+        "Clone v1.5: git clone --depth 1 -b v1.5 "
+        "https://github.com/bytedance/Dolphin.git ~/projects/Dolphin-1.5"
+    )
 
 
 def main() -> None:
@@ -58,28 +83,17 @@ def main() -> None:
                         help="Path to rankshift/models directory "
                              "(default: <repo_root>/models)")
     parser.add_argument("--dolphin-repo", type=Path,
-                        default=Path.home() / "projects" / "Dolphin",
-                        help="Path to Dolphin v1.0 repo "
-                             "(must contain demo_page_hf.py)")
+                        default=Path.home() / "projects" / "Dolphin-1.5",
+                        help="Path to Dolphin repo (v1.5 recommended; "
+                             "needs demo_page.py or demo_page_hf.py)")
     parser.add_argument("--max-batch-size", type=int, default=16,
                         help="Max document elements per inference batch")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
     model_dir = args.model_dir or (repo_root / "models")
-    snapshot = model_dir / DOLPHIN_SNAPSHOT
-    if not snapshot.exists():
-        sys.exit(f"ERROR: Dolphin snapshot not found at {snapshot}")
-
-    demo_script = args.dolphin_repo / "demo_page_hf.py"
-    if not demo_script.exists():
-        sys.exit(
-            f"ERROR: {demo_script} not found.\n"
-            "Clone the v1.0 branch: "
-            "git clone --depth 1 -b v1.0 "
-            "https://github.com/bytedance/Dolphin.git "
-            f"{args.dolphin_repo}"
-        )
+    snapshot = resolve_dolphin_snapshot(model_dir)
+    demo_script = pick_demo_script(args.dolphin_repo)
 
     images = sorted(
         p for p in args.images_dir.iterdir()
@@ -161,7 +175,7 @@ def main() -> None:
         mirror_once()
 
     if rc != 0:
-        sys.exit(f"ERROR: demo_page_hf.py exited with code {rc}")
+        sys.exit(f"ERROR: {demo_script.name} exited with code {rc}")
 
     n_ok = sum(
         1 for src in todo

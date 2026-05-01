@@ -3,6 +3,7 @@ Wrapper around OmniDocBench's docling_img2md.py
 Run with: .venv-docling  (CPU pipeline, no GPU required)
 """
 import argparse
+import sys
 from pathlib import Path
 from tqdm import tqdm
 

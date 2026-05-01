@@ -15,6 +15,9 @@ def main():
     ap.add_argument("--out-dir",    type=Path, required=True)
     ap.add_argument("--model-dir",  type=Path, required=True,
                     help="Path to opendatalab/MinerU2.5-2509-1.2B snapshot")
+    ap.add_argument("--backend", default="vllm-engine",
+                    choices=["vllm-engine", "transformers"],
+                    help="MinerUClient inference backend (default: vllm-engine, matching OmniDocBench)")
     args = ap.parse_args()
 
     from mineru_vl_utils import MinerUClient
@@ -29,7 +32,7 @@ def main():
         return
 
     client = MinerUClient(
-        backend="vllm-engine",
+        backend=args.backend,
         model_path=str(args.model_dir),
         handle_equation_block=False,
     )
