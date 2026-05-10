@@ -13,4 +13,8 @@ hdbscan
 matplotlib
 seaborn
 tqdm
+python-dotenv   # load .env for API keys (optional)
+anthropic       # Claude API vision inference
 editdistance    # reused from ScanGap metrics
+sacrebleu       # BLEU scoring for experiment 3
+nltk            # METEOR scoring for experiment 3

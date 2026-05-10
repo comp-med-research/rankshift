@@ -1,27 +1,20 @@
 # RankShift
 
-**Predicting model rankings on unlabeled target datasets via distributional reweighting of benchmark performance.**
+**Ranking stability for document OCR:** quantify how sensitive model **rankings** are to evaluation design — not only the benchmark average.
 
-## Hypothesis
+## Current focus
 
-Model rankings on an unlabeled target dataset can be predicted more accurately by matching target-to-benchmark distributional overlap than by assuming benchmark rankings transfer directly.
+1. **Dataset / page-type stratum** — OmniDocBench groups pages into natural types (e.g. notes, scientific documents, newspapers, *etc.*; **10** document strata in the official taxonomy). Same models, same metrics, but **restricted to each stratum**: how much does the **leaderboard order** move?
+2. **Alignment / matching strategy** — OmniDocBench end-to-end options include ``simple_match`` and ``quick_match`` (both rely on **Hungarian optimal assignment** / ``linear_sum_assignment`` on edit-cost matrices; ``quick_match`` adds line merging and truncation heuristics before assignment, with **chunked Hungarian** fallback on timeouts), ``no_split`` (whole-page), plus RankShift **md2md** scoring where useful. Same predictions, different matchers: rank stability.
+3. **Metric choice** — Beyond edit-based scores: **NED**, **BLEU**, **METEOR**, and other reporting metrics. Same aligned pairs, different scalar: how much do **Spearman ρ**, **Kendall τ**, and related **rank agreement** measures change?
 
-## Method
+**Goal:** Identify which of these factors drives **ranking instability** most strongly, including multi-way summaries (correlation structure, **3D-style factor grids** / tensors of rank agreement across strata × alignment × metric).
 
-1. **Feature extraction (unsupervised):** Extract CLS-token embeddings from DiT-large (document-pretrained) and DINOv2-large (vision-pretrained) for every document image — no labels used.
-2. **Benchmark scoring:** Score each OCR model on OmniDocBench using the official `pdf_validation.py` evaluation pipeline. Parse the per-page edit distance breakdowns it already produces.
-3. **Benchmark clustering:** Reduce 2048-dim embeddings with UMAP (→ 50d), then cluster with HDBSCAN. Record each model's mean per-page accuracy per cluster.
-4. **Target mapping:** Transform Real5 features through the same UMAP reducer. Assign to benchmark clusters via HDBSCAN `approximate_predict`; noise points fall back to nearest centroid. Compute cluster weight distribution.
-5. **Rank prediction:** Each model's predicted score = dot product of its per-cluster accuracy with target cluster weights.
-6. **Validation:** Compare predicted ranking vs. actual Real5 ranking (withheld labels). Metric: Kendall's τ / Spearman ρ vs. naive baseline (raw benchmark ranking).
+## Legacy: DiT/DINO + cluster/behavior pipeline
 
-## Feature backbones
+The previous line of work (unsupervised **DiT + DINO** features, **UMAP + HDBSCAN**, cluster-weighted transfer, **behavior latent** from score-only data) lives under:
 
-| Backbone | Model ID | Pretraining | Dim |
-|---|---|---|---|
-| DiT-large | `microsoft/dit-large` | BEiT masked-image-modelling on 42M scanned documents | 1024 |
-| DINOv2-large | `facebook/dinov2-large` | DINO self-distillation on diverse natural images | 1024 |
-| **Both (default)** | concatenated | — | **2048** |
+**[`legacy/behavior_dit_dino/`](legacy/behavior_dit_dino/)** — see [`legacy/behavior_dit_dino/README.md`](legacy/behavior_dit_dino/README.md) for layout and how to run those scripts. Large artifacts are in `legacy/behavior_dit_dino/features/` (git-ignored).
 
 ## Datasets
 
@@ -33,7 +26,7 @@ Ground truth for both: `OmniDocBench.json`. Real5 images are scanning-degraded v
 ## Environment
 
 ```bash
-# RankShift pipeline (feature extraction, clustering, evaluation):
+# RankShift (inference, scoring, new stability analyses):
 source ~/projects/rankshift/.venv/bin/activate   # Python 3.12
 
 # OmniDocBench scoring only:
@@ -210,60 +203,27 @@ page-d1561665.png,tesseract,0.82
 ```
 `score = 1 - edit_dist` (higher is better; 1.0 = perfect).
 
-### Step 2 — Extract visual features
+### Next — Ranking-stability analyses (new)
+
+Analysis code for **per-stratum** scores, **multi-alignment** parses, **multi-metric** tables, and **ρ / τ / agreement tensors** will live under `scripts/` (and/or `notebooks/`) as you wire OmniDocBench outputs into consolidated rank matrices. The legacy clustering pipeline is **not** required for that track.
+
+### Legacy — DiT/DINO features + clustering + behavior latent
+
+See **`legacy/behavior_dit_dino/README.md`**. Quick pointer:
 
 ```bash
 source ~/projects/rankshift/.venv/bin/activate
+# Example: extract features into legacy bundle
+python legacy/behavior_dit_dino/scripts/extract_features.py \
+  data/omnidocbench/omnidocbench/images \
+  legacy/behavior_dit_dino/features/omnidocbench_features.npy
 
-python scripts/extract_features.py \
-  data/omnidocbench/images \
-  features/omnidocbench_features.npy
-
-python scripts/extract_features.py \
-  data/real5/real5_omnidocbench/Real5-OmniDocBench-Scanning \
-  features/real5_features.npy
+python legacy/behavior_dit_dino/scripts/cluster_benchmark.py
+python legacy/behavior_dit_dino/scripts/compute_weights.py
+python legacy/behavior_dit_dino/scripts/predict_rankings.py
+python legacy/behavior_dit_dino/scripts/evaluate.py
 ```
-
-### Step 3 — Cluster benchmark + build performance map
-
-```bash
-python scripts/cluster_benchmark.py
-# Reads:  features/omnidocbench_features.npy + models/omnidocbench_scores.csv
-# Writes: features/umap_reducer.pkl, hdbscan_clusterer.pkl,
-#         features/benchmark_cluster_labels.csv, cluster_model_perf.csv
-```
-
-### Step 4 — Map Real5 into cluster space
-
-```bash
-python scripts/compute_weights.py
-# Reads:  features/real5_features.npy + umap_reducer.pkl + hdbscan_clusterer.pkl
-# Writes: features/real5_cluster_weights.csv, real5_cluster_labels.csv
-```
-
-### Step 5 — Predict rankings
-
-```bash
-python scripts/predict_rankings.py
-# Reads:  features/cluster_model_perf.csv + real5_cluster_weights.csv
-# Writes: results/predicted_rankings.csv
-```
-
-### Step 6 — Evaluate vs baseline
-
-```bash
-python scripts/evaluate.py
-# Reads:  results/predicted_rankings.csv
-#         models/real5_scores.csv (withheld actual Real5 rankings)
-#         models/omnidocbench_scores.csv (naive baseline)
-# Writes: results/evaluation.csv, results/summary.csv
-```
-
-### Optional — Visualise clusters
-
-```bash
-python scripts/visualise_clusters.py
-```
+New ranking-stability work can use a fresh `results/` at the repo root (create as needed) or another output directory of your choice.
 
 ## Project structure
 
@@ -275,23 +235,21 @@ rankshift/
 ├── predictions/                  # per-model .md prediction files (git-ignored, large)
 │   ├── omnidocbench/{model}/
 │   └── real5/{model}/
-├── features/                     # .npy embeddings + UMAP/HDBSCAN artifacts
+├── legacy/
+│   └── behavior_dit_dino/        # old: DiT/DINO + UMAP/HDBSCAN + behavior latent
+│       ├── features/             # .npy / pickles / cluster CSVs (git-ignored)
+│       ├── results/              # legacy pipeline outputs (git-ignored)
+│       └── scripts/              # extract_features, cluster_benchmark, …
 ├── models/                       # per-image score CSVs
-├── results/                      # ranking predictions + evaluation + plots
 └── scripts/
     ├── run_inference.py          # OCR inference: glm_ocr / paddleocr_vl_1_5 / deepseek_ocr_2
     ├── run_dolphin.py            # OCR inference: Dolphin-1.5 (separate Dolphin v1.0 repo + venv)
     ├── run_monkeyocr.py          # OCR inference: MonkeyOCR-pro-3B (separate MonkeyOCR repo + venv)
     ├── run_omnidoc_scoring.py    # orchestrator: run pdf_validation.py + parse results
     ├── parse_omnidoc_results.py  # OmniDocBench result files → scores CSV
-    ├── extract_features.py       # DiT + DINOv2 CLS-token extraction
-    ├── cluster_benchmark.py      # UMAP + HDBSCAN → cluster performance map
-    ├── compute_weights.py        # map target → cluster weights
-    ├── predict_rankings.py       # weighted average → predicted scores + ranks
-    ├── evaluate.py               # Kendall τ / Spearman ρ vs baseline
-    └── visualise_clusters.py     # UMAP scatter plots
+    └── infer/                    # extra runners (API, Docling, …)
 ```
 
-## Baseline
+## Baseline comparisons
 
-Raw benchmark model ranking (what everyone currently assumes transfers). Beat this on Kendall's τ.
+For **ranking stability**, baselines include: raw global OmniDocBench ranking, within-stratum means, and single-metric / single-alignment “official” leaderboard rows — compared via **rank correlation** and related agreement measures across factor settings.

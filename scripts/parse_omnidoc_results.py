@@ -34,10 +34,15 @@ Usage:
     --model      tesseract \\
     --save-name  tesseract_real5_quick_match \\
     --out        models/real5_scores.csv
+
+  # Tag alignment / metric for scripts/omnidoc_ranking_stability.py:
+  python scripts/parse_omnidoc_results.py ... \\
+    --alignment-label quick_match --metric-name text_edit_acc
 """
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -99,6 +104,12 @@ def main():
                         help="If set, restrict scores to images that have a "
                              ".md prediction in this directory (so partial runs "
                              "don't get diluted by score=0 for missing pages)")
+    parser.add_argument("--alignment-label", default=None,
+                        help="If set, add alignment column for multi-run merges with "
+                             "scripts/omnidoc_ranking_stability.py "
+                             "(omit to add alignment only via path::align in that script).")
+    parser.add_argument("--metric-name", default=None,
+                        help="If set, add metric column (e.g. text_edit_acc, teds_table).")
     args = parser.parse_args()
 
     save_name = args.save_name or f"{args.model}_quick_match"
@@ -115,10 +126,17 @@ def main():
         print(f"  Filtered to predictions on disk: {before} → {len(scores)} "
               f"(coverage = {len(scores)}/{len(pred_stems)} on-disk preds)")
 
-    rows = pd.DataFrame([
+    row_dicts = [
         {"image": img, "model_name": args.model, "score": score}
         for img, score in scores.items()
-    ])
+    ]
+    if args.alignment_label is not None:
+        for r in row_dicts:
+            r["alignment"] = args.alignment_label
+    if args.metric_name is not None:
+        for r in row_dicts:
+            r["metric"] = args.metric_name
+    rows = pd.DataFrame(row_dicts)
 
     if len(rows):
         print(f"  Mean score: {rows.score.mean():.3f}  "
@@ -126,14 +144,54 @@ def main():
               f"perfect: {(rows.score==1.0).sum()})")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    if args.out.exists():
-        existing = pd.read_csv(args.out)
-        # Drop any existing rows for this model so re-runs are idempotent
-        existing = existing[existing["model_name"] != args.model]
-        rows = pd.concat([existing, rows], ignore_index=True)
+    lock_path = Path(str(args.out) + ".lock")
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
 
-    rows.to_csv(args.out, index=False)
-    print(f"  → {args.out}  ({len(rows)} total rows)")
+    def _write_csv() -> None:
+        if args.out.exists():
+            existing = pd.read_csv(args.out)
+            al = args.alignment_label
+            mt = args.metric_name
+            if (
+                al is not None
+                and mt is not None
+                and "alignment" in existing.columns
+                and "metric" in existing.columns
+            ):
+                keep = ~(
+                    (existing["model_name"] == args.model)
+                    & (existing["alignment"] == al)
+                    & (existing["metric"] == mt)
+                )
+                existing = existing[keep]
+            elif al is not None and "alignment" in existing.columns:
+                existing = existing[
+                    ~((existing["model_name"] == args.model) & (existing["alignment"] == al))
+                ]
+            elif al is None:
+                existing = existing[existing["model_name"] != args.model]
+            else:
+                # First rows with alignment/metric appended to a legacy CSV without those columns
+                pass
+            rows_out = pd.concat([existing, rows], ignore_index=True)
+        else:
+            rows_out = rows
+        rows_out.to_csv(args.out, index=False)
+        print(f"  → {args.out}  ({len(rows_out)} total rows)")
+
+    if fcntl is not None and sys.platform != "win32":
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "w") as lockf:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+            try:
+                _write_csv()
+            finally:
+                fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+    else:
+        _write_csv()
 
 
 if __name__ == "__main__":

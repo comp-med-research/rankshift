@@ -8,15 +8,11 @@ data/
 # Large artifacts (downloaded HF snapshots, OCR predictions, feature dumps)
 models/
 predictions/
-features/*.npy
-features/*.pkl
-features/*.csv
+# Archived DiT/DINO + cluster pipeline (features, results, scripts — keep locally)
+legacy/
 
 # Per-image score CSVs and result outputs
 models/*.csv
-results/*.csv
-results/*.json
-
 notebooks/.ipynb_checkpoints/
 
 # Virtualenvs
@@ -33,7 +29,11 @@ notebooks/.ipynb_checkpoints/
 logs/
 
 .venv-vllm/
-features/
-results/
+# New analyses at repo root (optional)
+results/*.csv
+results/*.json
 
 rankshift_save_2026-04-28.tgz
+.env.example
+paper/
+results/

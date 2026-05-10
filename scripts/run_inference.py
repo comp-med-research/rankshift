@@ -16,8 +16,9 @@ matching venv):
 For dolphin_1_5     use scripts/run_dolphin.py    (Dolphin v1.5 repo; see setup_dolphin_opendoc.sh).
 For opendoc_0_1b    use scripts/infer/run_opendoc.py (.venv-opendoc; see setup_dolphin_opendoc.sh).
 For monkeyocr_pro_3b use scripts/run_monkeyocr.py (requires MonkeyOCR repo).
-For chandra2, docling_ocr, doctr, donut, nougat, marker, rolmocr, tesseract
+For chandra2, docling_ocr, doctr, rolmocr, tesseract
 use scripts/infer/run_extra_benchmark_models.py (see setup_extra_benchmark_models.sh).
+For ChatGPT (OpenAI vision) and Gemini use scripts/infer/run_vision_api_predictions.py.
 
 Usage:
   source ~/projects/rankshift/.venv/bin/activate     # for glm/paddle

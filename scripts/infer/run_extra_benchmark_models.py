@@ -8,9 +8,6 @@ Batch inference for additional document-OCR baselines. Writes one .md per image 
 Models & typical venv / deps (see scripts/setup_extra_benchmark_models.sh):
   tesseract     pytesseract + system `tesseract` binary
   doctr         pip install python-doctr torch
-  donut         transformers + torch (naver-clova-ix/donut-base-finetuned-docvqa)
-  nougat        transformers + torch (facebook/nougat-base)
-  marker        marker-pdf + pymupdf (image → one-page PDF → PdfConverter)
   docling_ocr   docling (same as scripts/infer/run_docling.py)
   chandra2      transformers; HF `datalab-to/chandra-ocr-2` (gated — accept license on Hub)
   rolmocr       transformers; HF `reducto/RolmOCR`
@@ -20,9 +17,7 @@ VLMs (chandra2, rolmocr) follow the same chat-template path as GLM-OCR in run_in
 from __future__ import annotations
 
 import argparse
-import io
 import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -36,8 +31,6 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp"}
 HF_IDS = {
     "chandra2": "datalab-to/chandra-ocr-2",
     "rolmocr": "reducto/RolmOCR",
-    "donut": "naver-clova-ix/donut-base-finetuned-docvqa",
-    "nougat": "facebook/nougat-base",
 }
 
 CHANDRA2_PROMPT = (
@@ -117,71 +110,6 @@ def infer_vlm(state: dict, image_path: Path) -> str:
     )
 
 
-def load_donut(model_id: str, device: str) -> dict[str, Any]:
-    from transformers import DonutProcessor, VisionEncoderDecoderModel
-
-    processor = DonutProcessor.from_pretrained(model_id)
-    model = VisionEncoderDecoderModel.from_pretrained(model_id).to(device).eval()
-    return {"kind": "donut", "model": model, "processor": processor, "device": device}
-
-
-def infer_donut(state: dict, image_path: Path) -> str:
-    processor = state["processor"]
-    model = state["model"]
-    device = state["device"]
-    image = Image.open(image_path).convert("RGB")
-    pixel_values = processor(image, return_tensors="pt").pixel_values.to(device)
-    q = "Extract all visible text from the document in natural reading order."
-    task = f"<s_docvqa><s_question>{q}<s_answer>"
-    decoder_input_ids = processor.tokenizer(
-        task, add_special_tokens=False, return_tensors="pt"
-    ).input_ids.to(device)
-    with torch.inference_mode():
-        out = model.generate(
-            pixel_values,
-            decoder_input_ids=decoder_input_ids,
-            max_new_tokens=2048,
-            pad_token_id=processor.tokenizer.pad_token_id,
-            eos_token_id=processor.tokenizer.eos_token_id,
-            bad_words_ids=[[processor.tokenizer.unk_token_id]],
-        )
-    seq = processor.batch_decode(out, skip_special_tokens=True)[0]
-    return seq.replace(processor.tokenizer.eos_token, "").replace(
-        processor.tokenizer.pad_token, ""
-    )
-
-
-def load_nougat(model_id: str, device: str) -> dict[str, Any]:
-    from transformers import NougatProcessor, VisionEncoderDecoderModel
-
-    processor = NougatProcessor.from_pretrained(model_id)
-    model = VisionEncoderDecoderModel.from_pretrained(model_id).to(device).eval()
-    return {"kind": "nougat", "model": model, "processor": processor, "device": device}
-
-
-def infer_nougat(state: dict, image_path: Path) -> str:
-    processor = state["processor"]
-    model = state["model"]
-    device = state["device"]
-    image = Image.open(image_path).convert("RGB")
-    pixel_values = processor(images=image, return_tensors="pt").pixel_values.to(device)
-    with torch.inference_mode():
-        out = model.generate(
-            pixel_values,
-            min_length=model.decoder.config.min_length,
-            max_new_tokens=min(3584, model.decoder.config.max_position_embeddings - 64),
-            bad_words_ids=[[processor.tokenizer.unk_token_id]],
-            eos_token_id=processor.tokenizer.eos_token_id,
-            pad_token_id=processor.tokenizer.pad_token_id,
-            use_cache=True,
-        )
-    text = processor.batch_decode(out, skip_special_tokens=True)[0]
-    try:
-        return processor.post_process_generation(text, fix_markdown=False)
-    except Exception:
-        return text
-
-
 def load_doctr(_: str, _device: str) -> dict[str, Any]:
     from doctr.io import DocumentFile
     from doctr.models import ocr_predictor
@@ -207,40 +135,6 @@ def infer_tesseract(_: dict, image_path: Path) -> str:
     return pytesseract.image_to_string(Image.open(image_path), lang="eng", config="--psm 6")
 
 
-def load_marker(_: str, _device: str) -> dict[str, Any]:
-    from marker.converters.pdf import PdfConverter
-    from marker.models import create_model_dict
-
-    artifact = create_model_dict()
-    converter = PdfConverter(artifact_dict=artifact)
-    return {"kind": "marker", "converter": converter}
-
-
-def infer_marker(state: dict, image_path: Path) -> str:
-    import fitz
-    from marker.output import text_from_rendered
-
-    img = Image.open(image_path)
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-    w, h = img.size
-    pdf = fitz.open()
-    page = pdf.new_page(width=w, height=h)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    page.insert_image(page.rect, stream=buf.getvalue())
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
-        tmp_pdf = f.name
-    try:
-        pdf.save(tmp_pdf)
-        pdf.close()
-        rendered = state["converter"](tmp_pdf)
-        text, _, _ = text_from_rendered(rendered)
-        return text
-    finally:
-        Path(tmp_pdf).unlink(missing_ok=True)
-
-
 def load_docling(_: str, _device: str) -> dict[str, Any]:
     from docling.document_converter import DocumentConverter
 
@@ -255,20 +149,14 @@ def infer_docling(state: dict, image_path: Path) -> str:
 LOADERS: dict[str, Callable[..., dict[str, Any]]] = {
     "chandra2": load_chandra2,
     "rolmocr": load_rolmocr,
-    "donut": load_donut,
-    "nougat": load_nougat,
     "doctr": load_doctr,
-    "marker": load_marker,
     "docling_ocr": load_docling,
 }
 
 INFERS: dict[str, Callable[..., str]] = {
     "chandra2": infer_vlm,
     "rolmocr": infer_vlm,
-    "donut": infer_donut,
-    "nougat": infer_nougat,
     "doctr": infer_doctr,
-    "marker": infer_marker,
     "docling_ocr": infer_docling,
 }
 
@@ -278,10 +166,7 @@ def main() -> None:
     ap.add_argument(
         "--model",
         required=True,
-        choices=sorted(
-            list(LOADERS.keys())
-            + ["tesseract"]
-        ),
+        choices=sorted(list(LOADERS.keys()) + ["tesseract"]),
     )
     ap.add_argument("--images-dir", type=Path, required=True)
     ap.add_argument("--out-dir", type=Path, required=True)
@@ -289,7 +174,7 @@ def main() -> None:
         "--hf-model",
         type=str,
         default=None,
-        help="Override Hugging Face model id for chandra2 / rolmocr / donut / nougat",
+        help="Override Hugging Face model id for chandra2 / rolmocr",
     )
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
