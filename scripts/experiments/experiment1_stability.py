@@ -653,11 +653,43 @@ def run_strata_stability(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    import argparse
     root = Path(os.environ.get("RANKSHIFT_ROOT", Path(__file__).resolve().parents[2])).resolve()
-    stability_root = root / "results" / "experiment1" / "analysis" / "stability"
+    exp1 = root / "results" / "experiment1"
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--omnidoc-csv", type=Path,
+                    default=exp1 / "scores_omnidoc_v15_full.csv")
+    ap.add_argument("--real5-csv", type=Path,
+                    default=exp1 / "scores_real5.csv")
+    ap.add_argument("--out-dir", type=Path,
+                    default=root / "results" / "experiment1" / "analysis" / "stability")
+    args = ap.parse_args()
+
+    stability_root = args.out_dir
 
     print(f"Exp 1 stability stats ({N_BOOTSTRAP} bootstrap iterations) …")
-    omnidoc, real5 = load_data(root)
+
+    # Override load_data paths via monkey-patching the expected filenames
+    import types
+    _orig_load = load_data
+
+    def _load_data_override(r: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+        gt_json = exp1 / "gt_omnidoc_v15_1355.json"
+        if not gt_json.is_file():
+            raise SystemExit(f"GT JSON not found: {gt_json}")
+        lookup = _load_strata_lookup(gt_json)
+        omnidoc = pd.read_csv(args.omnidoc_csv)
+        real5   = pd.read_csv(args.real5_csv)
+        omnidoc["stem"] = omnidoc["image"].map(lambda x: Path(str(x)).stem)
+        omnidoc["data_source"] = omnidoc["stem"].map(lambda s: lookup.get(s, {}).get("data_source", ""))
+        omnidoc["layout"]      = omnidoc["stem"].map(lambda s: lookup.get(s, {}).get("layout", ""))
+        n_unmapped = (omnidoc["data_source"] == "").sum()
+        if n_unmapped:
+            print(f"  WARNING: {n_unmapped} OmniDoc rows have no strata mapping")
+        return omnidoc, real5
+
+    omnidoc, real5 = _load_data_override(root)
     print(f"  OmniDoc: {omnidoc['model_name'].nunique()} models, {omnidoc['image'].nunique()} pages")
     print(f"  Real5:   {real5['model_name'].nunique()} models, {real5['image'].nunique()} pages")
 

@@ -97,14 +97,32 @@ def to_latex(table: pd.DataFrame) -> str:
 
 
 def main() -> None:
+    import argparse
     root = _root()
+    exp1 = root / "results" / "experiment1"
     out_dir = root / "results" / "experiment1" / "tables"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    table = build_table(root)
-    table.to_csv(out_dir / "model_rank_real5_delta.csv", index=False)
-    (out_dir / "model_rank_real5_delta.tex").write_text(to_latex(table))
-    print(f"Wrote {out_dir / 'model_rank_real5_delta.tex'}")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--omnidoc-csv", type=Path, default=exp1 / "scores_omnidoc_v15_full.csv")
+    ap.add_argument("--real5-csv",   type=Path, default=exp1 / "scores_real5.csv")
+    ap.add_argument("--stem", default=None, help="Output filename stem (default: derived from --omnidoc-csv)")
+    args = ap.parse_args()
+
+    stem = args.stem or args.omnidoc_csv.stem.replace("scores_", "")
+
+    omni  = _rank_table(args.omnidoc_csv, "omnidoc_rank", "omnidoc_score")
+    real5 = _rank_table(args.real5_csv,   "real5_rank",   "real5_score")
+    table = omni.merge(real5, on="model_name", how="inner")
+    table["real5_delta"] = table["omnidoc_rank"] - table["real5_rank"]
+    table["model_display"] = table["model_name"].map(display_model_name)
+    table = table.sort_values(["omnidoc_rank", "model_display"]).reset_index(drop=True)
+
+    csv_out = out_dir / f"model_rank_real5_delta_{stem}.csv"
+    tex_out = out_dir / f"model_rank_real5_delta_{stem}.tex"
+    table.to_csv(csv_out, index=False)
+    tex_out.write_text(to_latex(table))
+    print(f"Wrote {tex_out}")
     print(table[["model_display", "omnidoc_rank", "real5_rank", "real5_delta"]].to_string(index=False))
 
 

@@ -63,9 +63,9 @@ except ModuleNotFoundError:
 EVAL_DIR = "omnidocbench_eval"
 
 ALIGNMENT_CONDITIONS: dict[str, str] = {
-    "e2e_quick_match":    "omnidoc_quick_match",
-    "e2e_simple_match":   "omnidoc_simple_match",
-    "e2e_no_split":       "omnidoc_no_split",
+    "e2e_quick_match":    "omnidoc_e2e_quick_match",
+    "e2e_simple_match":   "omnidoc_e2e_simple_match",
+    "e2e_no_split":       "omnidoc_e2e_no_split",
     "md2md_quick_match":  "omnidoc_md2md_quick_match",
     "md2md_simple_match": "omnidoc_md2md_simple_match",
     "md2md_no_split":     "omnidoc_md2md_no_split",
@@ -99,14 +99,14 @@ MODEL_RENAMES = {"glm_ocr": "glmocr"}
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_scores(root: Path) -> pd.DataFrame:
+def load_scores(root: Path, score_file: str = "scores.csv") -> pd.DataFrame:
     eval_root = root / "results" / EVAL_DIR
     frames = []
     for alignment, condition_dir in ALIGNMENT_CONDITIONS.items():
-        path = eval_root / condition_dir / "scores.csv"
+        path = eval_root / condition_dir / score_file
         if not path.is_file():
             raise FileNotFoundError(f"Missing: {path}")
-        df = pd.read_csv(path, usecols=["image", "model_name", "score"])
+        df = pd.read_csv(path, usecols=["image", "model_name", "score", "metric"])
         df["model_name"] = df["model_name"].replace(MODEL_RENAMES)
         df["alignment"] = alignment
         frames.append(df)
@@ -745,12 +745,21 @@ def fig_rank_displacement_heatmap(disp_df: pd.DataFrame, out_path: Path) -> None
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    import argparse
     root = Path(os.environ.get("RANKSHIFT_ROOT", Path(__file__).resolve().parents[2])).resolve()
-    out_dir = root / "results" / "experiment2" / "analysis"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--score-file", default="scores.csv",
+                    help="Filename to read from each alignment dir (default: scores.csv)")
+    ap.add_argument("--out-dir", type=Path,
+                    default=root / "results" / "experiment2" / "analysis",
+                    help="Output directory")
+    args = ap.parse_args()
+
+    out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading scores from omnidocbench_eval …")
-    long_df = load_scores(root)
+    long_df = load_scores(root, args.score_file)
     coverage = coverage_table(long_df)
     print(coverage[["alignment", "n_models", "n_pages"]].to_string(index=False))
 

@@ -214,9 +214,16 @@ def score_margin_by_alignment(df: pd.DataFrame, out_path: Path) -> None:
 
 
 def main() -> None:
+    import argparse
     root = Path(os.environ.get("RANKSHIFT_ROOT", Path(__file__).resolve().parents[2])).resolve()
     exp2_dir = root / "results" / "experiment2"
-    out_dir = exp2_dir / "analysis"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--end2end-csv",  type=Path, default=exp2_dir / "scores_overall_e2e_quick_match.csv")
+    ap.add_argument("--md2md-csv",    type=Path, default=exp2_dir / "scores_overall_md2md_quick_match.csv")
+    ap.add_argument("--out-dir",      type=Path, default=exp2_dir / "analysis_overall")
+    args = ap.parse_args()
+
+    out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     py = str(root / ".venv" / "bin" / "python") if (root / ".venv").is_dir() else sys.executable
     gt_json = exp2_dir / "gt_v15_1355.json"
@@ -228,8 +235,8 @@ def main() -> None:
             sys.exit(r.returncode)
 
     # Combine scores
-    e2e = exp2_dir / "scores_end2end.csv"
-    md2 = exp2_dir / "scores_md2md.csv"
+    e2e = args.end2end_csv
+    md2 = args.md2md_csv
     frames = []
     for p in (e2e, md2):
         if p.is_file():

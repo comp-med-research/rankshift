@@ -86,7 +86,7 @@ def to_latex(df: pd.DataFrame) -> str:
         r"\label{tab:omnidocbench-e2e-quick-match}",
         r"\begin{tabular}{lrrrrrr}",
         r"\toprule",
-        r"Model & Overall$\uparrow$ & TextEdit$\downarrow$ & ReadingOrder$\downarrow$ & FormulaCDM$\uparrow$ & TableTEDS$\uparrow$ & TableTEDS-S$\uparrow$ \\",
+        r"Model & Overall$\uparrow$ & TextEdit$\downarrow$ & FormulaCDM$\uparrow$ & TableTEDS$\uparrow$ & TableTEDS-S$\uparrow$ & ReadingOrder$\downarrow$ \\",
         r"\midrule",
     ]
     for _, row in df.iterrows():
@@ -96,10 +96,10 @@ def to_latex(df: pd.DataFrame) -> str:
                     _latex_escape(str(row["Model"])),
                     f"{row['Overall']:.2f}",
                     f"{row['TextEdit']:.3f}",
-                    f"{row['ReadingOrder']:.3f}",
                     f"{row['FormulaCDM']:.2f}",
                     f"{row['TableTEDS']:.2f}",
                     f"{row['TableTEDS-S']:.2f}",
+                    f"{row['ReadingOrder']:.3f}",
                 ]
             )
             + r" \\"

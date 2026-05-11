@@ -30,11 +30,12 @@ from scipy.stats import kendalltau, spearmanr
 
 
 SOURCES = [
-    ("quick_mgam", "Quick + MAGMA", "results/experiment1/scores_omnidoc_v15_full.csv"),
-    ("quick_match_no_mgam", "Quick no MAGMA", "results/experiment2/scores_e2fix_quick_nomgam.csv"),
-    ("simple_match", "Simple match", "results/experiment2/scores_e2fix_simple_match.csv"),
-    ("no_split", "No split", "results/experiment2/scores_e2fix_no_split.csv"),
-    ("md2md", "MD2MD", "results/experiment2/scores_md2md.csv"),
+    ("e2e_quick_match",    "E2E Quick",      "results/experiment2/scores_overall_e2e_quick_match.csv"),
+    ("e2e_simple_match",   "E2E Simple",     "results/experiment2/scores_overall_e2e_simple_match.csv"),
+    ("e2e_no_split",       "E2E No split",   "results/experiment2/scores_overall_e2e_no_split.csv"),
+    ("md2md_quick_match",  "MD2MD Quick",    "results/experiment2/scores_overall_md2md_quick_match.csv"),
+    ("md2md_simple_match", "MD2MD Simple",   "results/experiment2/scores_overall_md2md_simple_match.csv"),
+    ("md2md_no_split",     "MD2MD No split", "results/experiment2/scores_overall_md2md_no_split.csv"),
 ]
 
 
@@ -264,7 +265,7 @@ def write_markdown(
         "",
         winners.to_markdown(index=False),
         "",
-        "## Top-k Churn Relative To Quick + MAGMA",
+        "## Top-k Churn Relative To Quick Match",
         "",
         top3.to_markdown(index=False),
         "",
@@ -293,15 +294,38 @@ def write_markdown(
 
 
 def main() -> None:
+    import argparse
     root_dir = root()
-    out_dir = root_dir / "results" / "experiment2" / "analysis_alignment" / "strikingness"
+    exp2 = root_dir / "results" / "experiment2"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--e2e-quick-csv",          type=Path, default=exp2 / "scores_overall_e2e_quick_match.csv")
+    ap.add_argument("--e2e-simple-csv",         type=Path, default=exp2 / "scores_overall_e2e_simple_match.csv")
+    ap.add_argument("--e2e-no-split-csv",       type=Path, default=exp2 / "scores_overall_e2e_no_split.csv")
+    ap.add_argument("--md2md-quick-csv",        type=Path, default=exp2 / "scores_overall_md2md_quick_match.csv")
+    ap.add_argument("--md2md-simple-csv",       type=Path, default=exp2 / "scores_overall_md2md_simple_match.csv")
+    ap.add_argument("--md2md-no-split-csv",     type=Path, default=exp2 / "scores_overall_md2md_no_split.csv")
+    ap.add_argument("--out-dir",                type=Path,
+                    default=root_dir / "results" / "experiment2" / "analysis_alignment_overall" / "strikingness")
+    args = ap.parse_args()
+
+    out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    global SOURCES
+    SOURCES = [
+        ("e2e_quick_match",    "E2E Quick",      str(args.e2e_quick_csv)),
+        ("e2e_simple_match",   "E2E Simple",     str(args.e2e_simple_csv)),
+        ("e2e_no_split",       "E2E No split",   str(args.e2e_no_split_csv)),
+        ("md2md_quick_match",  "MD2MD Quick",    str(args.md2md_quick_csv)),
+        ("md2md_simple_match", "MD2MD Simple",   str(args.md2md_simple_csv)),
+        ("md2md_no_split",     "MD2MD No split", str(args.md2md_no_split_csv)),
+    ]
 
     scores = read_scores(root_dir)
     wide, ranks = mean_and_rank(scores)
 
     pairwise = pd.DataFrame(pairwise_flip_rows(wide))
-    topk = pd.DataFrame(topk_churn_rows(wide, "quick_mgam"))
+    topk = pd.DataFrame(topk_churn_rows(wide, "e2e_quick_match"))
     winners = pd.DataFrame(winner_rows(wide))
     movement = pd.DataFrame(rank_movement_rows(ranks))
     vulnerable = pd.DataFrame(adjacent_vulnerability_rows(wide, ranks))

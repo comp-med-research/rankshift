@@ -29,9 +29,9 @@ except ModuleNotFoundError:
 
 
 ALIGNMENT_SOURCES = {
-    "quick_match": "scores_end2end.csv",
-    "simple_match": "scores_e2fix_simple_match.csv",
-    "no_split": "scores_e2fix_no_split.csv",
+    "e2e_quick_match":  "scores_overall_e2e_quick_match.csv",
+    "e2e_simple_match": "scores_overall_e2e_simple_match.csv",
+    "e2e_no_split":     "scores_overall_e2e_no_split.csv",
 }
 
 
@@ -145,7 +145,7 @@ def heatmap(mat: pd.DataFrame, out_path: Path, title: str, cbar: str) -> None:
 
 
 def bump_chart(mean_long: pd.DataFrame, out_path: Path) -> None:
-    alignments = ["quick_match", "simple_match", "no_split"]
+    alignments = ["e2e_quick_match", "e2e_simple_match", "e2e_no_split"]
     ranks = mean_long.copy()
     ranks["rank"] = ranks.groupby("alignment")["score"].rank(ascending=False, method="min")
     models = sorted(ranks["model_name"].unique())
@@ -239,10 +239,28 @@ def score_margins(mean_wide: pd.DataFrame, out_path: Path) -> None:
 
 
 def main() -> None:
+    import argparse
     root = _root()
     exp2_dir = root / "results" / "experiment2"
-    out_dir = exp2_dir / "analysis_alignment"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--e2e-quick-csv",    type=Path, default=exp2_dir / "scores_overall_e2e_quick_match.csv")
+    ap.add_argument("--e2e-simple-csv",   type=Path, default=exp2_dir / "scores_overall_e2e_simple_match.csv")
+    ap.add_argument("--e2e-no-split-csv", type=Path, default=exp2_dir / "scores_overall_e2e_no_split.csv")
+    ap.add_argument("--out-dir",          type=Path, default=exp2_dir / "analysis_alignment_overall")
+    args = ap.parse_args()
+
+    out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Allow per-run CSV overrides
+    global ALIGNMENT_SOURCES
+    ALIGNMENT_SOURCES = {
+        "e2e_quick_match":  args.e2e_quick_csv.name,
+        "e2e_simple_match": args.e2e_simple_csv.name,
+        "e2e_no_split":     args.e2e_no_split_csv.name,
+    }
+    # Resolve exp2_dir to the directory containing the overridden CSVs
+    exp2_dir = args.e2e_quick_csv.parent
 
     long_df = load_scores(exp2_dir, require_all_alignments=True)
     mean_long, mean_wide, rank_wide = mean_rank_tables(long_df)
@@ -267,7 +285,7 @@ def main() -> None:
 
     summary = {
         "alignments": list(ALIGNMENT_SOURCES.keys()),
-        "input_sources": {alignment: str(exp2_dir / filename) for alignment, filename in ALIGNMENT_SOURCES.items()},
+        "input_sources": {alignment: str(exp2_dir / filename) for alignment, filename in ALIGNMENT_SOURCES.items()},  # noqa: E501
         "row_count": int(len(long_df)),
         "model_count": int(long_df["model_name"].nunique()),
         "models": sorted(long_df["model_name"].unique().tolist()),
