@@ -10,6 +10,9 @@ models/
 predictions/
 # Archived DiT/DINO + cluster pipeline (features, results, scripts — keep locally)
 legacy/
+alignment_viewer/
+scripts/alignment_viewer_app.py
+notebooks/
 
 # Per-image score CSVs and result outputs
 models/*.csv

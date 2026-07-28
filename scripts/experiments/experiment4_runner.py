@@ -148,6 +148,41 @@ def ned(a: str, b: str) -> float:
 # Main
 # ---------------------------------------------------------------------------
 
+def _score_model_name(model: str) -> str:
+    """Map prediction dir name to scores_long model_name when they differ."""
+    if model == 'glm_ocr':
+        return 'glmocr'
+    return model
+
+
+def _load_md2md_and_qm_scores(root: Path) -> tuple[pd.Series, pd.Series]:
+    """Return (md2md, e2e quick_match) score indices keyed by (model_name, image)."""
+    md2md_path = root / 'results' / 'experiment2' / 'scores_md2md.csv'
+    qm_path = root / 'results' / 'experiment2' / 'scores_experiment2_merged.csv'
+    if md2md_path.is_file() and qm_path.is_file():
+        md2md_df = pd.read_csv(md2md_path)
+        qm_df = pd.read_csv(qm_path)
+        qm_sub = qm_df[qm_df['alignment'] == 'quick_match'] if 'alignment' in qm_df.columns else qm_df
+        return (
+            md2md_df.set_index(['model_name', 'image'])['score'],
+            qm_sub.set_index(['model_name', 'image'])['score'],
+        )
+
+    long_path = root / 'results' / 'experiment2' / 'analysis' / 'scores_long.csv'
+    if not long_path.is_file():
+        raise FileNotFoundError(
+            f"Need scores_md2md.csv + scores_experiment2_merged.csv, or {long_path}"
+        )
+    long_df = pd.read_csv(long_path)
+    md2md = long_df[long_df['alignment'] == 'md2md_no_split']
+    qm = long_df[long_df['alignment'] == 'e2e_quick_match']
+    print(f"[E4] loading scores from {long_path.name}: md2md_no_split + e2e_quick_match")
+    return (
+        md2md.set_index(['model_name', 'image'])['score'],
+        qm.set_index(['model_name', 'image'])['score'],
+    )
+
+
 def _load_default_models(root: Path) -> list[str]:
     import importlib.util
     spec = importlib.util.spec_from_file_location(
@@ -189,10 +224,7 @@ def main() -> None:
         gt_ds_map[img] = (pi.get('page_attribute') or {}).get('data_source', '')
 
     # Load existing md2md and quick_match per-page scores
-    md2md_df = pd.read_csv(root / 'results' / 'experiment2' / 'scores_md2md.csv')
-    qm_df    = pd.read_csv(root / 'results' / 'experiment2' / 'scores_experiment2_merged.csv')
-    md2md_idx = md2md_df.set_index(['model_name', 'image'])['score']
-    qm_idx   = qm_df.set_index(['model_name', 'image'])['score']
+    md2md_idx, qm_idx = _load_md2md_and_qm_scores(root)
 
     rows = []
     for model in model_list:
@@ -211,8 +243,9 @@ def main() -> None:
             pred_stripped = normalize(strip_markdown(pred_raw))
 
             # Scores from existing experiments
-            md2md_score = md2md_idx.get((model, img), float('nan'))
-            qm_score    = qm_idx.get((model, img), float('nan'))
+            score_model = _score_model_name(model)
+            md2md_score = md2md_idx.get((score_model, img), float('nan'))
+            qm_score    = qm_idx.get((score_model, img), float('nan'))
 
             # Stripped NED (content without formatting overhead)
             gt_norm = gt_map[img]
