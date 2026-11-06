@@ -5,10 +5,13 @@ Outputs: results/experiment2/analysis/bump_rolmocr_glmocr.png
 
 Usage:
   python scripts/experiments/experiment2_bump_rolmocr_glmocr.py
+  python scripts/experiments/experiment2_bump_rolmocr_glmocr.py \\
+      --analysis-dir results/experiment2_16model/analysis
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 
@@ -45,9 +48,25 @@ HIGHLIGHT = {
 
 def main() -> None:
     root = Path(os.environ.get("RANKSHIFT_ROOT", Path(__file__).resolve().parents[2])).resolve()
-    out  = root / "results" / "experiment2" / "analysis" / "bump_rolmocr_glmocr.png"
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--analysis-dir",
+        type=Path,
+        default=root / "results" / "experiment2" / "analysis",
+        help="Experiment 2 analysis directory containing mean_scores.csv",
+    )
+    ap.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Output PNG (default: <analysis-dir>/bump_rolmocr_glmocr.png)",
+    )
+    args = ap.parse_args()
 
-    df = pd.read_csv(root / "results" / "experiment2" / "analysis" / "mean_scores.csv")
+    analysis_dir = args.analysis_dir if args.analysis_dir.is_absolute() else root / args.analysis_dir
+    out = args.out or (analysis_dir / "bump_rolmocr_glmocr.png")
+
+    df = pd.read_csv(analysis_dir / "mean_scores.csv")
     df["rank"] = df.groupby("alignment")["score"].rank(ascending=False, method="min")
     df = df[df["alignment"].isin(ALIGNMENT_ORDER)]
 
@@ -120,7 +139,7 @@ def main() -> None:
     ax.set_title(
         f"{display_model_name('glmocr')} vs {display_model_name('rolmocr')}: "
         "rank trajectory across alignment strategies\n"
-        "Grey = other 12 models  |  Shading = which model is ahead in each segment",
+        f"Grey = other {n_models - 2} models  |  Shading = which model is ahead in each segment",
         fontsize=10,
     )
     ax.grid(axis="y", alpha=0.20, linestyle="--")

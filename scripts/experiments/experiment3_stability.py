@@ -311,26 +311,54 @@ def _fig_displacement_heatmap(
     pair_col: str,
     out_path: Path,
     title: str,
+    x_label_rotation: float = 45,
 ) -> None:
     pairs = disp_df[pair_col].unique().tolist()
     pivot = disp_df.pivot_table(
         index="model_display", columns=pair_col, values="rank_displacement", aggfunc="first"
     ).reindex(columns=[p for p in pairs if p in disp_df[pair_col].unique()])
+    # Display rank_A − rank_B: + = moved up toward #1 on B-pages, − = moved down.
+    pivot = -pivot
     pivot = pivot.loc[pivot.abs().mean(axis=1).sort_values(ascending=False).index]
     vmax = max(float(pivot.abs().max().max()), 1)
-    fig, ax = plt.subplots(figsize=(max(5, len(pivot.columns) * 1.1), max(4, len(pivot) * 0.42)))
+    n_cols = len(pivot.columns)
+    max_label_len = max((len(str(c)) for c in pivot.columns), default=10)
+    max_y_label_len = max((len(str(i)) for i in pivot.index), default=10)
+    annot = pivot.map(lambda x: f"{x:+.0f}" if x != 0 else "0")
+    fig, ax = plt.subplots(figsize=(max(6, n_cols * 1.25), max(4, len(pivot) * 0.42)))
     sns.heatmap(
-        pivot, annot=True, fmt=".0f", cmap="RdBu_r", center=0,
+        pivot, annot=annot, fmt="", cmap="RdBu", center=0,
         vmin=-vmax, vmax=vmax, linewidths=0.4,
-        cbar_kws={"label": "Rank displacement (b − a)", "shrink": 0.7}, ax=ax,
+        cbar_kws={"label": "Rank change on B vs A (+ = toward #1)", "shrink": 0.7}, ax=ax,
     )
-    ax.set_title(title + "\nPositive = lower rank under b", fontsize=10)
+    ax.set_title(
+        title + "\n+ = better rank on B-pages; − = worse rank on B-pages",
+        fontsize=10,
+    )
     ax.set_xlabel("")
     ax.set_ylabel("")
-    ax.tick_params(axis="x", labelsize=8, rotation=25)
-    ax.tick_params(axis="y", labelsize=8, rotation=0)
-    fig.tight_layout()
-    _save(fig, out_path)
+    ax.set_xticks(np.arange(n_cols) + 0.5)
+    if x_label_rotation == 0:
+        ax.set_xticklabels([str(c) for c in pivot.columns], rotation=0, ha="center", va="top", fontsize=8)
+        bottom = 0.12
+    else:
+        ax.set_xticklabels(
+            [str(c) for c in pivot.columns],
+            rotation=x_label_rotation,
+            ha="right",
+            va="top",
+            rotation_mode="anchor",
+            fontsize=8,
+        )
+        bottom = min(0.42, 0.22 + 0.004 * max_label_len)
+    ax.set_yticks(np.arange(len(pivot)) + 0.5)
+    ax.set_yticklabels(pivot.index, fontsize=8, ha="right")
+    left = min(0.48, 0.14 + 0.014 * max_y_label_len)
+    fig.subplots_adjust(left=left, bottom=bottom, right=0.88)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.12)
+    plt.close(fig)
+    print(f"  {out_path.name}")
 
 
 # ---------------------------------------------------------------------------

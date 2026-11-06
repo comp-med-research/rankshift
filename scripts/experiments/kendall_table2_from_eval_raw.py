@@ -240,6 +240,35 @@ def fmt_tau(obs: float, lo: float, hi: float) -> str:
     return f"{f(obs)} [{f(lo)}, {f(hi)}]"
 
 
+def resolve_eval_paths(eval_root: Path) -> tuple[dict[tuple[str, str], Path], Path]:
+    """Resolve raw score dirs; supports 14-model and 16-model eval layouts."""
+    eval_root = eval_root.resolve()
+    if (eval_root / "omnidoc_e2e_quick_match" / "raw").is_dir():
+        raw_dirs = {
+            ("E2E", "quick_match"): eval_root / "omnidoc_e2e_quick_match" / "raw",
+            ("E2E", "simple_match"): eval_root / "omnidoc_e2e_simple_match" / "raw",
+            ("E2E", "no_split"): eval_root / "omnidoc_e2e_no_split" / "raw",
+            ("M2M", "quick_match"): eval_root / "omnidoc_md2md_quick_match" / "raw",
+            ("M2M", "simple_match"): eval_root / "omnidoc_md2md_simple_match" / "raw",
+            ("M2M", "no_split"): eval_root / "omnidoc_md2md_no_split" / "raw",
+        }
+        raw_real5 = eval_root / "real5_e2e_quick_match" / "raw"
+    else:
+        raw_dirs = {
+            ("E2E", "quick_match"): eval_root / "omnidoc_quick_match" / "raw",
+            ("E2E", "simple_match"): eval_root / "omnidoc_simple_match" / "raw",
+            ("E2E", "no_split"): eval_root / "omnidoc_no_split" / "raw",
+            ("M2M", "quick_match"): eval_root / "omnidoc_md2md_quick_match" / "raw",
+            ("M2M", "simple_match"): eval_root / "omnidoc_md2md_simple_match" / "raw",
+            ("M2M", "no_split"): eval_root / "omnidoc_md2md_no_split" / "raw",
+        }
+        raw_real5 = eval_root / "real5_quick_match" / "raw"
+    missing = [str(p) for p in (*raw_dirs.values(), raw_real5) if not p.is_dir()]
+    if missing:
+        raise FileNotFoundError("Missing eval raw dirs:\n  " + "\n  ".join(missing))
+    return raw_dirs, raw_real5
+
+
 def run_table(
     eval_root: Path,
     gt_json: Path,
@@ -249,15 +278,7 @@ def run_table(
     seed: int,
 ) -> tuple[pd.DataFrame, dict[str, pd.Series]]:
     eval_root = eval_root.resolve()
-    raw_dirs = {
-        ("E2E", "quick_match"): eval_root / "omnidoc_quick_match" / "raw",
-        ("E2E", "simple_match"): eval_root / "omnidoc_simple_match" / "raw",
-        ("E2E", "no_split"): eval_root / "omnidoc_no_split" / "raw",
-        ("M2M", "quick_match"): eval_root / "omnidoc_md2md_quick_match" / "raw",
-        ("M2M", "simple_match"): eval_root / "omnidoc_md2md_simple_match" / "raw",
-        ("M2M", "no_split"): eval_root / "omnidoc_md2md_no_split" / "raw",
-    }
-    raw_real5 = eval_root / "real5_quick_match" / "raw"
+    raw_dirs, raw_real5 = resolve_eval_paths(eval_root)
 
     ned_vectors: dict[tuple[str, str], pd.Series] = {}
     ned_maps_cache: dict[tuple[str, str], dict[str, dict[str, float]]] = {}
@@ -266,7 +287,7 @@ def run_table(
         ned_maps_cache[(mode, align)] = smap
         ned_vectors[(mode, align)] = mean_per_model(smap)
 
-    # Common model set (should be 14 — intersection of all six)
+    # Common model set — intersection of all six alignments
     common = None
     for s in ned_vectors.values():
         common = set(s.index) if common is None else common & set(s.index)
@@ -296,16 +317,20 @@ def run_table(
     add_align_row("Alignment", "M2M vs M2M", "quick_match vs no_split (M2M)", m2m_quick, m2m_ns)
     add_align_row("Alignment", "M2M vs M2M", "simple_match vs no_split (M2M)", m2m_simple, m2m_ns)
     add_align_row("Alignment", "M2M vs M2M", "quick_match vs simple_match (M2M)", m2m_quick, m2m_simple)
-    add_align_row("Alignment", "E2E vs M2M", "no_split (E2E) vs no_split (M2M)", e2e_ns, m2m_ns)
-    add_align_row("Alignment", "E2E vs M2M", "no_split (E2E) vs quick_match (M2M)", e2e_ns, m2m_quick)
-    add_align_row("Alignment", "E2E vs M2M", "quick_match (E2E) vs quick_match (M2M)", e2e_quick, m2m_quick)
-    add_align_row(
-        "Alignment",
-        "E2E vs M2M",
-        "quick_match (E2E) vs simple_match (M2M)",
-        e2e_quick,
-        m2m_simple,
-    )
+    # --- Cross-paradigm: all 3 E2E × 3 M2M alignment pairs
+    e2e_m2m_pairs = [
+        (e2e_quick, m2m_quick, "quick_match (E2E) vs quick_match (M2M)"),
+        (e2e_quick, m2m_simple, "quick_match (E2E) vs simple_match (M2M)"),
+        (e2e_quick, m2m_ns, "quick_match (E2E) vs no_split (M2M)"),
+        (e2e_simple, m2m_quick, "simple_match (E2E) vs quick_match (M2M)"),
+        (e2e_simple, m2m_simple, "simple_match (E2E) vs simple_match (M2M)"),
+        (e2e_simple, m2m_ns, "simple_match (E2E) vs no_split (M2M)"),
+        (e2e_ns, m2m_quick, "no_split (E2E) vs quick_match (M2M)"),
+        (e2e_ns, m2m_simple, "no_split (E2E) vs simple_match (M2M)"),
+        (e2e_ns, m2m_ns, "no_split (E2E) vs no_split (M2M)"),
+    ]
+    for a, b, label in e2e_m2m_pairs:
+        add_align_row("Alignment", "E2E vs M2M", label, a, b)
 
     gt = load_gt_attributes(gt_json)
     e2e_long = long_frame_from_maps(ned_maps_cache[e2e_quick], model_order=models)
@@ -432,13 +457,14 @@ def to_latex(df: pd.DataFrame, n_models: int, n_boot: int) -> str:
     lines = [
         r"\begin{table}[t]",
         r"\centering",
-        r"\small",
+        r"\footnotesize",
+        r"\setlength{\tabcolsep}{3pt}",
         rf"\caption{{Pairwise Kendall's $\tau$ between model rankings (mean page-level scores). "
         rf"95\% CIs from bootstrap resampling of models ($n={n_models}$), $B={n_boot}$ replicates.}}",
-        r"\label{tab:kendall-stability-raw}",
-        r"\begin{tabular}{llll}",
+        r"\label{tab:kendall_tau}",
+        r"\begin{tabular}{p{1.1cm} p{6.3cm} p{2.7cm} p{1.8cm}}",
         r"\toprule",
-        r"Dimension & Comparison & Kendall's $\tau$ [95\% CI] & Category \\",
+        r"\textbf{Dimension} & \textbf{Comparison} & \textbf{Kendall's $\tau$ [95\% CI]} & \textbf{Category} \\",
         r"\midrule",
     ]
     current_dim = None
@@ -449,10 +475,10 @@ def to_latex(df: pd.DataFrame, n_models: int, n_boot: int) -> str:
             dim_cell = ""
         else:
             if current_dim is not None:
-                lines.append(r"\addlinespace[0.4em]")
+                lines.append(r"\midrule")
             current_dim = dim
         cat = str(row["category"]) if row["category"] else "---"
-        if cat == "":
+        if cat == "" or cat == "---":
             cat = "---"
         comp = _latex_escape_comp(str(row["comparison"]))
         tau = str(row["kendall_tau_ci"])

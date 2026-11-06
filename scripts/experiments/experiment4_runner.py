@@ -11,26 +11,29 @@ Method (per model × page):
   2. Measure markdown formatting density of the prediction.
   3. Strip markdown structure from the prediction, compute stripped NED against GT.
   4. Compare: md2md_score, stripped_ned, qm_score.
-  5. format_penalty  = stripped_ned - md2md_score   (≥0: formatting is hurting)
-     content_residual = stripped_ned - qm_score      (≥0: content errors beyond formatting)
+  5. format_penalty   = stripped_score - md2md_score
+     content_residual = qm_score - stripped_score
+     qm_md2md_delta    = content_residual + format_penalty
 
-Artifacts under results/experiment4/:
+Artifacts under results/experiment4/ (14-model) or results/experiment4_16model/:
   - format_decomposition.csv   per-(model, page) measurements
   - model_summary.csv          mean metrics per model, sorted by format_penalty
   - figures/                   scatter + bar plots
 
 Usage:
-  python scripts/experiments/experiment4_runner.py
-  MODELS="chandra2 rolmocr mineru_1_2b" python scripts/experiments/experiment4_runner.py
+  .venv/bin/python scripts/experiments/experiment4_runner.py
+  .venv/bin/python scripts/experiments/experiment4_runner.py --variant 16
+  MODELS="chandra2 rolmocr" .venv/bin/python scripts/experiments/experiment4_runner.py --variant 16
 
 Env:
   RANKSHIFT_ROOT, OMNIDOCBENCH_DIR  (optional)
-  MODELS   — space-separated subset (default: all in MODELS list)
+  MODELS   — space-separated subset (default: all models for variant)
   SKIP_FIGURES=1
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -42,8 +45,14 @@ import pandas as pd
 
 try:
     from scripts.experiments.model_display import display_model_name
+    from scripts.experiments.models_config import MODELS_14, MODELS_16, ROOT, experiment_paths
 except ModuleNotFoundError:
-    from model_display import display_model_name
+    from model_display import display_model_name  # type: ignore
+    from models_config import MODELS_14, MODELS_16, ROOT, experiment_paths  # type: ignore
+
+PRED_DIR = ROOT / "predictions" / "omnidocbench"
+PRED_ALIASES = {"glmocr": "glm_ocr"}
+NESTED_PRED_MODELS = {"dotsocr"}
 
 # ---------------------------------------------------------------------------
 # Markdown stripping
@@ -148,59 +157,63 @@ def ned(a: str, b: str) -> float:
 # Main
 # ---------------------------------------------------------------------------
 
-def _score_model_name(model: str) -> str:
-    """Map prediction dir name to scores_long model_name when they differ."""
-    if model == 'glm_ocr':
-        return 'glmocr'
-    return model
+def _page_stem(image: str) -> str:
+    name = Path(image).name
+    lowered = name.lower()
+    for ext in ('.jpg', '.jpeg', '.png', '.webp'):
+        if lowered.endswith(ext):
+            return name[: -len(ext)]
+    return name
 
 
-def _load_md2md_and_qm_scores(root: Path) -> tuple[pd.Series, pd.Series]:
+def _pred_path(model: str, image: str) -> Path | None:
+    slug = PRED_ALIASES.get(model, model)
+    stem = _page_stem(image)
+    flat = PRED_DIR / slug / f'{stem}.md'
+    if flat.is_file():
+        return flat
+    if slug in NESTED_PRED_MODELS:
+        nested = PRED_DIR / slug / stem
+        for name in (f'{stem}.md', f'{stem}_nohf.md'):
+            cand = nested / name
+            if cand.is_file():
+                return cand
+    return None
+
+
+def _load_md2md_and_qm_scores(exp2_analysis_dir: Path) -> tuple[pd.Series, pd.Series]:
     """Return (md2md, e2e quick_match) score indices keyed by (model_name, image)."""
-    md2md_path = root / 'results' / 'experiment2' / 'scores_md2md.csv'
-    qm_path = root / 'results' / 'experiment2' / 'scores_experiment2_merged.csv'
-    if md2md_path.is_file() and qm_path.is_file():
-        md2md_df = pd.read_csv(md2md_path)
-        qm_df = pd.read_csv(qm_path)
-        qm_sub = qm_df[qm_df['alignment'] == 'quick_match'] if 'alignment' in qm_df.columns else qm_df
-        return (
-            md2md_df.set_index(['model_name', 'image'])['score'],
-            qm_sub.set_index(['model_name', 'image'])['score'],
-        )
-
-    long_path = root / 'results' / 'experiment2' / 'analysis' / 'scores_long.csv'
+    long_path = exp2_analysis_dir / 'scores_long.csv'
     if not long_path.is_file():
-        raise FileNotFoundError(
-            f"Need scores_md2md.csv + scores_experiment2_merged.csv, or {long_path}"
-        )
+        raise FileNotFoundError(f"Need {long_path}")
     long_df = pd.read_csv(long_path)
     md2md = long_df[long_df['alignment'] == 'md2md_no_split']
     qm = long_df[long_df['alignment'] == 'e2e_quick_match']
-    print(f"[E4] loading scores from {long_path.name}: md2md_no_split + e2e_quick_match")
+    print(f"[E4] loading scores from {long_path}: md2md_no_split + e2e_quick_match")
     return (
         md2md.set_index(['model_name', 'image'])['score'],
         qm.set_index(['model_name', 'image'])['score'],
     )
 
 
-def _load_default_models(root: Path) -> list[str]:
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        '_scoring', root / 'scripts' / 'run_omnidoc_scoring.py')
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return list(mod.MODELS)
+def _out_dir_for_variant(variant: str) -> Path:
+    name = 'experiment4_16model' if variant == '16' else 'experiment4'
+    return ROOT / 'results' / name
 
 
 def main() -> None:
-    root = Path(os.environ.get('RANKSHIFT_ROOT', Path(__file__).resolve().parents[2])).resolve()
+    ap = argparse.ArgumentParser(description='Experiment 4 — format decomposition / content_residual')
+    ap.add_argument('--variant', choices=['14', '16'], default='14')
+    args = ap.parse_args()
+
+    root = Path(os.environ.get('RANKSHIFT_ROOT', ROOT)).resolve()
     ob   = Path(os.environ.get('OMNIDOCBENCH_DIR', root.parent / 'OmniDocBench')).resolve()
     models_env = [x for x in os.environ.get('MODELS', '').split() if x]
     skip_figs  = os.environ.get('SKIP_FIGURES', '').lower() in {'1', 'true', 'yes'}
 
-    model_list = models_env if models_env else _load_default_models(root)
-    pred_root  = root / 'predictions' / 'omnidocbench'
-    out_dir    = root / 'results' / 'experiment4'
+    paths = experiment_paths(args.variant)
+    model_list = models_env if models_env else (MODELS_16 if args.variant == '16' else MODELS_14)
+    out_dir = _out_dir_for_variant(args.variant)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     normalize = _make_normalizer(ob)
@@ -224,28 +237,24 @@ def main() -> None:
         gt_ds_map[img] = (pi.get('page_attribute') or {}).get('data_source', '')
 
     # Load existing md2md and quick_match per-page scores
-    md2md_idx, qm_idx = _load_md2md_and_qm_scores(root)
+    md2md_idx, qm_idx = _load_md2md_and_qm_scores(paths['exp2_analysis_dir'])
 
     rows = []
     for model in model_list:
-        pred_dir = pred_root / model
-        if not pred_dir.is_dir():
+        pred_slug = PRED_ALIASES.get(model, model)
+        if not (PRED_DIR / pred_slug).is_dir():
             print(f'[E4] skip {model} — no predictions dir')
             continue
         print(f'[E4] processing {model} ...')
         for img, gt_text in gt_map.items():
-            stem = Path(img).stem
-            pred_path = pred_dir / f'{stem}.md'
-            if not pred_path.is_file():
+            pred_path = _pred_path(model, img)
+            if pred_path is None:
                 continue
             pred_raw = pred_path.read_text(encoding='utf-8', errors='replace')
-            pred_norm = normalize(pred_raw)
             pred_stripped = normalize(strip_markdown(pred_raw))
 
-            # Scores from existing experiments
-            score_model = _score_model_name(model)
-            md2md_score = md2md_idx.get((score_model, img), float('nan'))
-            qm_score    = qm_idx.get((score_model, img), float('nan'))
+            md2md_score = md2md_idx.get((model, img), float('nan'))
+            qm_score    = qm_idx.get((model, img), float('nan'))
 
             # Stripped NED (content without formatting overhead)
             gt_norm = gt_map[img]
@@ -331,9 +340,11 @@ def main() -> None:
     import json as _json
     manifest = {
         'experiment': 4,
+        'variant': args.variant,
         'hypothesis': 'md2md penalises markdown-rich outputs; format_penalty = stripped_score - md2md_score',
         'models': model_list,
         'gt_json': str(gt_json),
+        'scores_long': str(paths['exp2_analysis_dir'] / 'scores_long.csv'),
         'outputs': {
             'format_decomposition': str(out_csv),
             'model_summary': str(summary_csv),

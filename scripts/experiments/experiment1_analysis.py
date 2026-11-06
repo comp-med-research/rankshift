@@ -500,14 +500,65 @@ def print_cross_dataset(stats_overall: dict, stats_stratum: dict) -> None:
 
 
 def main() -> None:
+    import argparse
+
     root = Path(os.environ.get("RANKSHIFT_ROOT", Path(__file__).resolve().parents[2])).resolve()
-    exp = root / "results" / "experiment1"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--experiment-dir", type=Path, default=None)
+    ap.add_argument("--omnidoc-csv", type=Path, default=None)
+    ap.add_argument("--real5-csv", type=Path, default=None)
+    ap.add_argument(
+        "--cross-dataset-only",
+        action="store_true",
+        help="Only run OmniDoc vs Real5 cross-dataset scatter/stratum figures",
+    )
+    ap.add_argument(
+        "--cross-dataset-out",
+        type=Path,
+        default=None,
+        help="Output dir for cross-dataset figures (default: analysis/cross_dataset)",
+    )
+    args = ap.parse_args()
+
+    exp = args.experiment_dir or (root / "results" / "experiment1")
     analysis_root = exp / "analysis"
     py = str(root / ".venv" / "bin" / "python") if (root / ".venv").is_dir() else sys.executable
     gt = exp / "gt_omnidoc_v15_1355.json"
 
     if not gt.is_file():
         raise SystemExit(f"GT JSON not found: {gt} — run experiment1_runner.py first")
+
+    omnidoc_csv = args.omnidoc_csv or (exp / "scores_omnidoc_v15_full.csv")
+    real5_csv = args.real5_csv or (exp / "scores_real5.csv")
+    cross_dir = args.cross_dataset_out or (analysis_root / "cross_dataset")
+
+    if args.cross_dataset_only:
+        if not omnidoc_csv.is_file() or not real5_csv.is_file():
+            raise SystemExit(f"Missing cross-dataset CSVs: {omnidoc_csv}, {real5_csv}")
+        cross_dir.mkdir(parents=True, exist_ok=True)
+        stats_overall = fig_cross_dataset_scatter(
+            omnidoc_csv, real5_csv,
+            cross_dir / "cross_dataset_scatter.png",
+        )
+        stats_stratum = fig_cross_dataset_stratum(
+            omnidoc_csv, real5_csv, gt,
+            cross_dir / "cross_dataset_stratum.png",
+        )
+        stats_volatility = fig_cross_dataset_volatility(
+            omnidoc_csv, real5_csv, gt,
+            cross_dir / "cross_dataset_rank_volatility.png",
+        )
+        print_cross_dataset(stats_overall, stats_stratum)
+        cross_summary = {
+            "overall": stats_overall,
+            "per_stratum": stats_stratum,
+            "rank_volatility": stats_volatility,
+        }
+        (cross_dir / "cross_dataset_summary.json").write_text(
+            json.dumps(cross_summary, indent=2)
+        )
+        print(f"Wrote → {cross_dir / 'cross_dataset_summary.json'}")
+        return
 
     score_csvs = sorted(exp.glob("scores_*.csv"))
     if not score_csvs:
@@ -559,10 +610,7 @@ def main() -> None:
     (analysis_root / "combined_summary.json").write_text(json.dumps(combined, indent=2))
 
     # Cross-dataset correlation: OmniDocBench vs Real5
-    omnidoc_csv = exp / "scores_omnidoc_v15_full.csv"
-    real5_csv = exp / "scores_real5.csv"
     if omnidoc_csv.is_file() and real5_csv.is_file():
-        cross_dir = analysis_root / "cross_dataset"
         cross_dir.mkdir(parents=True, exist_ok=True)
 
         stats_overall = fig_cross_dataset_scatter(

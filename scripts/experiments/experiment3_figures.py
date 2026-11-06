@@ -5,6 +5,7 @@ Reads results/experiment3/scores_metrics.csv and produces:
   - bump_chart_metric.png          model rank under each metric (NED, BLEU, METEOR)
   - bar_mean_by_metric.png         mean score per model × metric
   - heatmap_metric_spearman.png    Spearman ρ between metrics on per-model means
+  - heatmap_metric_kendall.png      Kendall τ between metrics on per-model means
 
 Usage:
   python scripts/experiments/experiment3_figures.py
@@ -21,7 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from scipy.stats import spearmanr
+from scipy.stats import kendalltau, spearmanr
 
 try:
     from scripts.experiments.model_display import add_model_display_column, display_model_name
@@ -90,7 +91,13 @@ def bar_mean_by_metric(df: pd.DataFrame, out_path: Path) -> None:
     print(f"Wrote → {out_path}")
 
 
-def metric_spearman_heatmap(df: pd.DataFrame, out_path: Path) -> None:
+def _metric_correlation_heatmap(
+    df: pd.DataFrame,
+    out_path: Path,
+    *,
+    stat_name: str,
+    title: str,
+) -> None:
     metrics = sorted(df["metric"].unique())
     mean_per = df.groupby(["model_name", "metric"])["score"].mean().unstack("metric")
     mean_per = mean_per.dropna(how="all")
@@ -107,17 +114,40 @@ def metric_spearman_heatmap(df: pd.DataFrame, out_path: Path) -> None:
             if len(common) < 3:
                 mat[i, j] = np.nan
             else:
-                rho, _ = spearmanr(common[m1], common[m2])
-                mat[i, j] = float(rho)
+                if stat_name == "spearman":
+                    coeff, _ = spearmanr(common[m1], common[m2])
+                elif stat_name == "kendall":
+                    coeff, _ = kendalltau(common[m1], common[m2])
+                else:
+                    raise ValueError(f"Unknown stat: {stat_name}")
+                mat[i, j] = float(coeff)
     mat_df = pd.DataFrame(mat, index=metrics, columns=metrics)
     plt.figure(figsize=(max(4, n * 1.0), max(3, n * 0.9)))
     sns.heatmap(mat_df, annot=True, fmt=".3f", cmap="RdYlGn", vmin=-1, vmax=1, square=True)
-    plt.title("Spearman ρ Between Evaluation Metrics\n(Per-Model Mean Scores, Experiment 3)")
+    plt.title(title)
     plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=150)
     plt.close()
     print(f"Wrote → {out_path}")
+
+
+def metric_spearman_heatmap(df: pd.DataFrame, out_path: Path) -> None:
+    _metric_correlation_heatmap(
+        df,
+        out_path,
+        stat_name="spearman",
+        title="Spearman ρ Between Evaluation Metrics\n(Per-Model Mean Scores, Experiment 3)",
+    )
+
+
+def metric_kendall_heatmap(df: pd.DataFrame, out_path: Path) -> None:
+    _metric_correlation_heatmap(
+        df,
+        out_path,
+        stat_name="kendall",
+        title="Kendall τ Between Evaluation Metrics\n(Per-Model Mean Scores, Experiment 3)",
+    )
 
 
 def main() -> None:
@@ -142,12 +172,14 @@ def main() -> None:
     bump_chart(df, fig_dir / "bump_chart_metric.png")
     bar_mean_by_metric(df, fig_dir / "bar_mean_by_metric.png")
     metric_spearman_heatmap(df, fig_dir / "heatmap_metric_spearman.png")
+    metric_kendall_heatmap(df, fig_dir / "heatmap_metric_kendall.png")
 
     manifest = {
         "figures": [
             str(fig_dir / "bump_chart_metric.png"),
             str(fig_dir / "bar_mean_by_metric.png"),
             str(fig_dir / "heatmap_metric_spearman.png"),
+            str(fig_dir / "heatmap_metric_kendall.png"),
         ],
         "scores_csv": str(scores_path),
         "metrics": sorted(df["metric"].unique().tolist()),

@@ -48,7 +48,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from scipy.stats import kendalltau, spearmanr
+from scipy.stats import binomtest, kendalltau, spearmanr
 
 try:
     from scripts.experiments.model_display import add_model_display_column, display_model_name
@@ -99,8 +99,8 @@ MODEL_RENAMES = {"glm_ocr": "glmocr"}
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_scores(root: Path, score_file: str = "scores.csv") -> pd.DataFrame:
-    eval_root = root / "results" / EVAL_DIR
+def load_scores(root: Path, score_file: str = "scores.csv", eval_dir: str | None = None) -> pd.DataFrame:
+    eval_root = root / "results" / (eval_dir or EVAL_DIR)
     frames = []
     for alignment, condition_dir in ALIGNMENT_CONDITIONS.items():
         path = eval_root / condition_dir / score_file
@@ -164,7 +164,12 @@ def pairwise_correlations(mean_wide: pd.DataFrame) -> pd.DataFrame:
                 "kendall_p": float(tau_p) if not np.isnan(tau_p) else None,
             }
         )
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    df["q_spearman"] = _benjamini_hochberg(df["spearman_p"].to_numpy())
+    df["q_kendall"] = _benjamini_hochberg(df["kendall_p"].to_numpy())
+    df["sig_spearman"] = df["q_spearman"] < 0.05
+    df["sig_kendall"] = df["q_kendall"] < 0.05
+    return df
 
 
 def build_sym_matrix(pairwise: pd.DataFrame, alignments: list[str], col: str) -> pd.DataFrame:
@@ -490,6 +495,74 @@ def _ci(values: np.ndarray, alpha: float = 0.05) -> tuple[float, float]:
     return float(np.percentile(values, 100 * alpha / 2)), float(np.percentile(values, 100 * (1 - alpha / 2)))
 
 
+def _benjamini_hochberg(p_values: np.ndarray) -> np.ndarray:
+    """Return BH-FDR q-values; NaN inputs stay NaN."""
+    p = np.asarray(p_values, dtype=float)
+    q = np.full_like(p, np.nan)
+    valid = np.isfinite(p)
+    if valid.sum() == 0:
+        return q
+    pv = p[valid]
+    n = len(pv)
+    order = np.argsort(pv)
+    ranked = pv[order]
+    q_ranked = np.minimum.accumulate((ranked * n / np.arange(1, n + 1))[::-1])[::-1]
+    q_ranked = np.clip(q_ranked, 0.0, 1.0)
+    q_valid = np.empty_like(pv)
+    q_valid[order] = q_ranked
+    q[valid] = q_valid
+    return q
+
+
+def _bootstrap_p_two_sided(observed: float, bootstrap: np.ndarray) -> float:
+    boot = np.asarray(bootstrap, dtype=float)
+    boot = boot[np.isfinite(boot)]
+    if len(boot) == 0 or not np.isfinite(observed):
+        return float("nan")
+    return float((1 + np.sum(np.abs(boot) >= abs(observed))) / (1 + len(boot)))
+
+
+def _bootstrap_p_nonzero(bootstrap: np.ndarray) -> float:
+    """Two-sided bootstrap p-value for H0: displacement (or effect) = 0."""
+    boot = np.asarray(bootstrap, dtype=float)
+    boot = boot[np.isfinite(boot)]
+    if len(boot) == 0:
+        return float("nan")
+    p_lower = float(np.mean(boot <= 0))
+    p_upper = float(np.mean(boot >= 0))
+    return float(min(1.0, 2 * min(p_lower, p_upper)))
+
+
+def _bootstrap_p_one_sided_greater(observed: float, bootstrap: np.ndarray) -> float:
+    boot = np.asarray(bootstrap, dtype=float)
+    boot = boot[np.isfinite(boot)]
+    if len(boot) == 0 or not np.isfinite(observed):
+        return float("nan")
+    return float((1 + np.sum(boot >= observed)) / (1 + len(boot)))
+
+
+def _model_pair_page_flips(
+    mat_a: np.ndarray, mask_a: np.ndarray, mat_b: np.ndarray, mask_b: np.ndarray
+) -> tuple[list[tuple[int, int]], np.ndarray, np.ndarray]:
+    """Page-level order flips for each model pair between two alignments."""
+    n_pages, n_models = mat_a.shape
+    pairs: list[tuple[int, int]] = []
+    flip_counts = np.zeros(0, dtype=int)
+    valid_counts = np.zeros(0, dtype=int)
+    for i, j in combinations(range(n_models), 2):
+        sa = mat_a[:, i] - mat_a[:, j]
+        sb = mat_b[:, i] - mat_b[:, j]
+        valid = (
+            (mask_a[:, i] > 0) & (mask_a[:, j] > 0) & (mask_b[:, i] > 0) & (mask_b[:, j] > 0)
+            & np.isfinite(sa) & np.isfinite(sb) & (sa != 0) & (sb != 0)
+        )
+        flips = int(np.sum(valid & (np.sign(sa) != np.sign(sb))))
+        pairs.append((i, j))
+        flip_counts = np.append(flip_counts, flips)
+        valid_counts = np.append(valid_counts, int(valid.sum()))
+    return pairs, flip_counts, valid_counts
+
+
 def _pair_label(a: str, b: str) -> str:
     return f"{ALIGNMENT_LABELS.get(a, a)} vs {ALIGNMENT_LABELS.get(b, b)}"
 
@@ -519,6 +592,7 @@ def run_stability_stats(
     topk_rows: list[dict] = []
     reversal_rows: list[dict] = []
     displacement_rows: list[dict] = []
+    model_pair_rows: list[dict] = []
 
     print(f"\nBootstrap stability stats ({n_bootstrap} iterations per pair) …")
     for align_a, align_b in pairs:
@@ -560,6 +634,17 @@ def run_stability_stats(
         boot_churn: dict[int, list[float]] = {k: [] for k in range(1, n_models + 1)}
         boot_rev: list[float] = []
         boot_disp: dict[str, list[float]] = {m: [] for m in models}
+        boot_pair_flip: dict[tuple[int, int], list[float]] = {}
+
+        mp_pairs, mp_flip_counts, mp_valid_counts = _model_pair_page_flips(
+            mat_a, mask_a, mat_b, mask_b
+        )
+        mp_obs_rates = np.divide(
+            mp_flip_counts,
+            mp_valid_counts,
+            out=np.full_like(mp_flip_counts, np.nan, dtype=float),
+            where=mp_valid_counts > 0,
+        )
 
         for _ in range(n_bootstrap):
             sample = rng.integers(0, n_pages, size=n_pages)
@@ -579,8 +664,19 @@ def run_stability_stats(
             boot_rev.append(rr)
             for idx, model in enumerate(models):
                 if valid[idx]:
-                    vidx = int(np.flatnonzero(valid == True)[idx] if idx < valid.sum() else -1)
                     boot_disp[model].append(float(br_b[idx] - br_a[idx]))
+
+            _, boot_flip_counts, boot_valid_counts = _model_pair_page_flips(
+                mat_a[sample], mask_a[sample], mat_b[sample], mask_b[sample]
+            )
+            boot_flip_rates = np.divide(
+                boot_flip_counts,
+                boot_valid_counts,
+                out=np.full_like(boot_flip_counts, np.nan, dtype=float),
+                where=boot_valid_counts > 0,
+            )
+            for pair_idx, rate in enumerate(boot_flip_rates):
+                boot_pair_flip.setdefault(pair_idx, []).append(float(rate))
 
         # Merge bootstrap CIs into rows
         churn_boot_map = {}
@@ -612,27 +708,102 @@ def run_stability_stats(
             lo, hi = _ci(arr, alpha) if len(vals) > 1 else (float("nan"), float("nan"))
             abs_arr = np.abs(arr)
             abs_lo, abs_hi = _ci(abs_arr, alpha) if len(vals) > 1 else (float("nan"), float("nan"))
+            obs_disp = float(ranks_b[idx] - ranks_a[idx])
+            disp_p = _bootstrap_p_nonzero(arr)
             for row in displacement_rows:
                 if row["alignment_a"] == align_a and row["alignment_b"] == align_b and row["model_name"] == model:
                     row["boot_mean_disp"] = float(arr.mean())
                     row["disp_ci_low"], row["disp_ci_high"] = lo, hi
                     row["boot_mean_abs_disp"] = float(abs_arr.mean())
                     row["abs_disp_ci_low"], row["abs_disp_ci_high"] = abs_lo, abs_hi
+                    row["p_displacement"] = disp_p
+
+        for pair_idx, (i, j) in enumerate(mp_pairs):
+            obs_rate = float(mp_obs_rates[pair_idx]) if np.isfinite(mp_obs_rates[pair_idx]) else float("nan")
+            boot_rates = np.array(boot_pair_flip.get(pair_idx, []), dtype=float)
+            n_valid = int(mp_valid_counts[pair_idx])
+            k_flips = int(mp_flip_counts[pair_idx])
+            model_pair_rows.append({
+                "alignment_a": align_a,
+                "alignment_b": align_b,
+                "pair_label": label,
+                "group": group,
+                "model_a": models[i],
+                "model_b": models[j],
+                "model_a_display": display_model_name(models[i]),
+                "model_b_display": display_model_name(models[j]),
+                "n_pages_valid": n_valid,
+                "flip_count": k_flips,
+                "flip_rate": obs_rate,
+                "boot_mean_flip_rate": float(np.nanmean(boot_rates)) if len(boot_rates) else float("nan"),
+                "p_flip": float("nan"),
+            })
 
     topk_df = pd.DataFrame(topk_rows)
     reversal_df = pd.DataFrame(reversal_rows)
     disp_df = pd.DataFrame(displacement_rows)
+    model_pair_df = pd.DataFrame(model_pair_rows)
+
+    within_e2e_rate = float(
+        reversal_df.loc[reversal_df["group"] == "within_e2e", "reversal_rate"].mean()
+    )
+    within_md2md_rate = float(
+        reversal_df.loc[reversal_df["group"] == "within_md2md", "reversal_rate"].mean()
+    )
+    baseline_map = {"within_e2e": within_e2e_rate, "within_md2md": within_md2md_rate, "cross": within_e2e_rate}
+
+    reversal_pvals = []
+    for row in reversal_rows:
+        p0 = baseline_map[row["group"]]
+        bt = binomtest(row["reversal_count"], row["total_pairs"], p0, alternative="greater")
+        reversal_pvals.append(float(bt.pvalue))
+    reversal_df["null_reversal_rate"] = reversal_df["group"].map(baseline_map)
+    reversal_df["p_reversal"] = reversal_pvals
+
+    pair_mean_flip = model_pair_df.groupby(["alignment_a", "alignment_b"], sort=False)["flip_rate"].transform("mean")
+    model_pair_df["null_flip_rate"] = pair_mean_flip
+    flip_pvals = []
+    for _, row in model_pair_df.iterrows():
+        if row["n_pages_valid"] <= 0 or not np.isfinite(row["null_flip_rate"]):
+            flip_pvals.append(float("nan"))
+            continue
+        bt = binomtest(
+            int(row["flip_count"]),
+            int(row["n_pages_valid"]),
+            float(row["null_flip_rate"]),
+            alternative="two-sided",
+        )
+        flip_pvals.append(float(bt.pvalue))
+    model_pair_df["p_flip"] = flip_pvals
+
+    reversal_df["q_reversal"] = _benjamini_hochberg(reversal_df["p_reversal"].to_numpy())
+    reversal_df["sig_reversal"] = reversal_df["q_reversal"] < alpha
+    disp_df["q_displacement"] = _benjamini_hochberg(disp_df["p_displacement"].to_numpy())
+    disp_df["sig_displacement"] = disp_df["q_displacement"] < alpha
+    model_pair_df["q_flip"] = _benjamini_hochberg(model_pair_df["p_flip"].to_numpy())
+    model_pair_df["sig_flip"] = model_pair_df["q_flip"] < alpha
 
     topk_df.to_csv(out_dir / "topk_churn.csv", index=False)
     reversal_df.to_csv(out_dir / "pairwise_reversal_rates.csv", index=False)
     disp_df.to_csv(out_dir / "rank_displacements.csv", index=False)
+    model_pair_df.to_csv(out_dir / "model_pair_reversal_significance.csv", index=False)
+    model_pair_df[model_pair_df["sig_flip"]].sort_values(["q_flip", "flip_rate"], ascending=[True, False]).to_csv(
+        out_dir / "model_pair_reversal_significant.csv", index=False
+    )
+    disp_df[disp_df["sig_displacement"]].sort_values(["q_displacement", "abs_rank_displacement"], ascending=[True, False]).to_csv(
+        out_dir / "rank_displacements_significant.csv", index=False
+    )
 
     fig_topk_churn(topk_df, out_dir / "topk_churn.png")
     fig_reversal_rates(reversal_df, out_dir / "reversal_rates.png")
     fig_rank_displacement_heatmap(disp_df, out_dir / "rank_displacement_heatmap.png")
 
-    print(f"\nPairwise reversal rates:")
-    print(reversal_df[["pair_label", "group", "reversal_rate", "reversal_ci_low", "reversal_ci_high"]].to_string(index=False))
+    print(f"\nPairwise reversal rates (BH-FDR q < {alpha}):")
+    print(reversal_df[["pair_label", "group", "reversal_rate", "p_reversal", "q_reversal", "sig_reversal"]].to_string(index=False))
+    n_sig_disp = int(disp_df["sig_displacement"].sum())
+    n_sig_flip = int(model_pair_df["sig_flip"].sum())
+    print(f"\nSignificant rank displacements (q < {alpha}): {n_sig_disp} / {len(disp_df)}")
+    print(f"Significant model-pair page flips (q < {alpha}): {n_sig_flip} / {len(model_pair_df)}")
 
 
 def fig_topk_churn(topk_df: pd.DataFrame, out_path: Path) -> None:
@@ -710,26 +881,29 @@ def fig_rank_displacement_heatmap(disp_df: pd.DataFrame, out_path: Path) -> None
     pivot = disp_df.pivot_table(
         index="model_display", columns="pair_label", values="rank_displacement", aggfunc="first"
     ).reindex(columns=[p for p in pairs_ordered if p in disp_df["pair_label"].unique()])
+    # Display rank_A − rank_B: + = moved up toward #1 under alignment b, − = moved down.
+    pivot = -pivot
     # Sort models by mean absolute displacement descending
     pivot = pivot.loc[pivot.abs().mean(axis=1).sort_values(ascending=False).index]
 
     vmax = float(pivot.abs().max().max())
+    annot = pivot.map(lambda x: f"{x:+.0f}" if x != 0 else "0")
     fig, ax = plt.subplots(figsize=(max(10, len(pivot.columns) * 0.75), max(4.5, len(pivot) * 0.42)))
     sns.heatmap(
         pivot,
-        annot=True,
-        fmt=".0f",
-        cmap="RdBu_r",
+        annot=annot,
+        fmt="",
+        cmap="RdBu",
         center=0,
         vmin=-vmax,
         vmax=vmax,
         linewidths=0.4,
-        cbar_kws={"label": "Rank displacement (b − a)", "shrink": 0.7},
+        cbar_kws={"label": "Rank change on B vs A (+ = toward #1)", "shrink": 0.7},
         ax=ax,
     )
     ax.set_title(
         "Rank Displacement per Model per Alignment Pair (Experiment 2)\n"
-        "Positive = lower rank (worse) under alignment b",
+        "+ = better rank under alignment B; − = worse rank under alignment B",
         fontsize=10,
     )
     ax.set_xlabel("")
@@ -750,6 +924,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--score-file", default="scores.csv",
                     help="Filename to read from each alignment dir (default: scores.csv)")
+    ap.add_argument(
+        "--eval-dir",
+        default=os.environ.get("EVAL_DIR", EVAL_DIR),
+        help="Eval store folder under results/ (default: omnidocbench_eval)",
+    )
     ap.add_argument("--out-dir", type=Path,
                     default=root / "results" / "experiment2" / "analysis",
                     help="Output directory")
@@ -758,8 +937,8 @@ def main() -> None:
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Loading scores from omnidocbench_eval …")
-    long_df = load_scores(root, args.score_file)
+    print(f"Loading scores from {args.eval_dir} …")
+    long_df = load_scores(root, args.score_file, eval_dir=args.eval_dir)
     coverage = coverage_table(long_df)
     print(coverage[["alignment", "n_models", "n_pages"]].to_string(index=False))
 
@@ -791,7 +970,7 @@ def main() -> None:
     ]
 
     summary = {
-        "data_source": "results/omnidocbench_eval",
+        "data_source": f"results/{args.eval_dir}",
         "alignments": ALIGNMENT_ORDER,
         "model_name_normalisation": MODEL_RENAMES,
         "coverage": coverage[["alignment", "n_models", "n_pages"]].to_dict(orient="records"),

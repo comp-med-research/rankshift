@@ -18,6 +18,9 @@ MODEL_DISPLAY_NAMES = {
     "paddleocr_vl_1_5_vllm": "PaddleOCR-VL-1.5",
     "rolmocr": "RolmOCR",
     "youtu": "Youtu-Parsing",
+    "gemini2_5": "Gemini 2.5 Pro",
+    "gemini3_1_flash": "Gemini 3.1 Flash",
+    "gemini_api": "Gemini API",
 }
 
 

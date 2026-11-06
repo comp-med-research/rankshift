@@ -197,9 +197,22 @@ def fig_rank_heatmap(csv_path: Path, merged: pd.DataFrame, col: str, out_dir: Pa
     ax.set_title(f"Model Rank Within Each {factor_label} Stratum (1 = Best)")
     ax.set_xlabel(factor_label)
     ax.set_ylabel("Model")
-    plt.tight_layout()
+    n_strata = ranks.shape[1]
+    max_label_len = max((len(str(c)) for c in ranks.columns), default=10)
+    ax.set_xticks(np.arange(n_strata) + 0.5)
+    # seaborn.heatmap may reset tick label rotation; force 45° after draw
+    ax.set_xticklabels(ranks.columns, fontsize=8)
+    plt.setp(
+        ax.get_xticklabels(),
+        rotation=45,
+        ha="right",
+        rotation_mode="anchor",
+    )
+    ax.set_yticks(np.arange(n_models) + 0.5)
+    ax.set_yticklabels(ranks.index, fontsize=8, ha="right")
+    fig.subplots_adjust(bottom=min(0.42, 0.22 + 0.004 * max_label_len), left=0.22)
     p = out_dir / f"{safe_name(csv_path)}_rank_heatmap_{col}.png"
-    fig.savefig(p, dpi=150)
+    fig.savefig(p, dpi=150, bbox_inches="tight", pad_inches=0.12)
     plt.close(fig)
     return p
 
@@ -422,12 +435,18 @@ def main() -> None:
         default=None,
         help="Score CSV paths (default: all scores_*.csv in experiment dir)",
     )
+    ap.add_argument(
+        "--figures-dir",
+        type=Path,
+        default=None,
+        help="Output directory for PNGs (default: <experiment-dir>/figures)",
+    )
     args = ap.parse_args()
 
     root = Path(__file__).resolve().parents[2]
     exp = args.experiment_dir or (root / "results" / "experiment1")
     gt = args.gt_json or (exp / "gt_omnidoc_v15_1355.json")
-    fig_root = exp / "figures"
+    fig_root = args.figures_dir or (exp / "figures")
 
     if args.scores:
         paths = list(args.scores)
